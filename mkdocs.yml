@@ -58,6 +58,7 @@ nav:
       - H17 London Sweep & Reclaim: strategies/h17_london_sweep.md
       - Intraday Market Clock: strategies/market_clock.md
   - Validation & Research Lab:
+      - Master Retrospective & Blueprint: research/institutional_master_retrospective.md
       - Institutional Research Report: research/institutional_lab.md
       - Trailing Stop & TP1 Empirical Study: research/trailing_and_flip_study.md
   - Episodic Market Memory:

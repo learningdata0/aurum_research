@@ -1,14 +1,15 @@
 //+------------------------------------------------------------------+
 //|                                       AurumGoldH17ShadowEA.mq5   |
 //|                                  Copyright 2026, AURUM Research |
-//|        AURUM v0.8: Autonomous Virtual Forward Shadow Engine      |
+//|        AURUM v0.9: Autonomous Virtual Forward Shadow Engine      |
 //|               Strategy: Gold London Session Sweep-Reclaim        |
+//|        Equipped with Hybrid TP1 (50%), Breakeven & Trailing Stop |
 //+------------------------------------------------------------------+
 #property copyright   "AURUM Research"
 #property link        "https://github.com/aurum-research"
-#property version     "1.00"
-#property description "AURUM v0.8 Virtual Paper Trading EA for XAUUSD (Gold)."
-#property description "Trades Gold London Session sweeps with extreme expansion filter (>= 55.0 pts)."
+#property version     "1.10"
+#property description "AURUM v0.9 Virtual Paper Trading EA for XAUUSD (Gold)."
+#property description "Trades Gold London Session sweeps with TP1 (50% partial), Breakeven lock & Multi-Stage Trailing."
 
 //--- Inputs
 input group "=== Trading Mode ==="
@@ -22,6 +23,16 @@ input double InpMinLondonRange    = 55.0;     // Minimum London Session Range in
 input int    InpATRPeriod         = 14;       // ATR Period for Stop Loss padding
 input double InpSweepBufferATR    = 0.05;     // Min penetration beyond London level (ATR multiple)
 input int    InpMaxHoldBars       = 120;      // Max hold duration in M1 bars
+
+input group "=== Dynamic Risk & Trade Management ==="
+input bool   InpEnableHybridTP1   = true;     // Enable 50% TP1 partial close
+input double InpTP1Points         = 4.0;      // TP1 trigger distance in points ($4/oz)
+input bool   InpEnableBreakeven   = true;     // Move SL to Breakeven after TP1
+input bool   InpEnableTrailing    = true;     // Enable multi-stage trailing stop
+input double InpTrailStep1Pts     = 7.0;      // Points in profit to trigger Trail Step 1
+input double InpTrailLock1Pts     = 3.0;      // Profit points locked at Trail Step 1
+input double InpTrailStep2Pts     = 12.0;     // Points in profit to trigger Trail Step 2
+input double InpTrailLock2Pts     = 6.0;      // Profit points locked at Trail Step 2
 
 //--- Session Hour Constants (Broker Time: UTC+3 EEST / UTC+2 EET)
 // Broker is aligned with US-DST (16:30 Broker = 09:30 AM New York)
@@ -45,6 +56,10 @@ struct VirtualTrade
    double   risk_cash;
    int      entry_bar;
    bool     is_open;
+   bool     tp1_closed;      // true if 50% closed at TP1
+   double   tp1_price;       // price of TP1
+   double   tp1_cash;        // profit banked from TP1
+   bool     be_moved;        // true if SL moved to Breakeven
 };
 
 VirtualTrade g_trade;
@@ -62,23 +77,13 @@ datetime g_current_day;
 
 int      g_atr_handle;
 
-// Forward declaration
-void CalculateLondonLevels(datetime day_start);
-void EvaluateGoldSignal();
-void ExecuteOrder(string dir, double entry, double sl, double tp, double risk_pts);
-void CheckVirtualTradeExit(const MqlTick &tick);
-void UpdateDashboard(string status_text);
-void DrawHLine(string name, double price, color clr, string desc, ENUM_LINE_STYLE style=STYLE_DASH);
-void InitCsvLog();
-void LogTradeToCsv(const VirtualTrade &t, string action, double pnl, double r_mult, string reason);
-
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
 //+------------------------------------------------------------------+
 int OnInit()
 {
    g_virtual_balance  = InpInitialBalance;
-   g_ticket_counter   = 2000;
+   g_ticket_counter   = 1000;
    g_trade.is_open    = false;
    g_last_bar_time    = 0;
    g_current_day      = 0;
@@ -89,18 +94,22 @@ int OnInit()
    g_london_range     = 0.0;
    g_london_qualified = false;
 
+   // Create ATR indicator handle
    g_atr_handle = iATR(_Symbol, PERIOD_M1, InpATRPeriod);
    if(g_atr_handle == INVALID_HANDLE)
    {
-      Print("[ERROR] Failed to create ATR handle for Gold.");
+      Print("[ERROR] Failed to create ATR handle.");
       return INIT_FAILED;
    }
 
+   // Initialize log file
    InitCsvLog();
+
+   // Draw initial dashboard
    UpdateDashboard("INITIALIZED — WAITING FOR DATA");
 
-   PrintFormat("[AURUM GOLD H17] Initialized on %s (VirtualMode=%s, MinLondonRange=%.1f pts)",
-               _Symbol, InpVirtualMode ? "TRUE" : "FALSE", InpMinLondonRange);
+   PrintFormat("[AURUM GOLD H17 v1.1] Virtual Shadow Engine initialized on %s (VirtualMode=%s, TP1=%.1f pts, MinLondonRange=%.1f pts)",
+               _Symbol, InpVirtualMode ? "TRUE" : "FALSE", InpTP1Points, InpMinLondonRange);
 
    return INIT_SUCCEEDED;
 }
@@ -112,6 +121,7 @@ void OnDeinit(const int reason)
 {
    IndicatorRelease(g_atr_handle);
    Comment("");
+   // Clean visual lines
    ObjectDelete(0, "AURUM_GOLD_LH");
    ObjectDelete(0, "AURUM_GOLD_LL");
    ObjectDelete(0, "AURUM_GOLD_MID");
@@ -124,6 +134,7 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
 {
+   // 1. Check open virtual trade for TP/SL touch and trailing stop on every tick
    if(g_trade.is_open)
    {
       MqlTick tick;
@@ -133,11 +144,13 @@ void OnTick()
       }
    }
 
+   // 2. Only evaluate signals on completed new M1 bar
    datetime current_bar_time = iTime(_Symbol, PERIOD_M1, 0);
    if(current_bar_time == g_last_bar_time)
       return;
    g_last_bar_time = current_bar_time;
 
+   // 3. Update Daily Context & London Levels
    MqlDateTime dt;
    TimeCurrent(dt);
    datetime today = StringToTime(StringFormat("%04d.%02d.%02d", dt.year, dt.mon, dt.day));
@@ -148,85 +161,100 @@ void OnTick()
       CalculateLondonLevels(today);
    }
 
+   // 4. Update London Levels if in London session
    if(dt.hour >= LONDON_START_HOUR && dt.hour < LONDON_END_HOUR)
    {
       CalculateLondonLevels(today);
    }
 
+   // 5. Check if within NY Cash Session (16:30 to 22:30 broker time)
    int current_min_of_day = dt.hour * 60 + dt.min;
    int ny_open_min        = NY_OPEN_HOUR * 60 + NY_OPEN_MIN;
    int ny_close_min       = NY_CLOSE_HOUR * 60 + NY_CLOSE_MIN;
 
    bool in_ny_session = (current_min_of_day >= ny_open_min && current_min_of_day < ny_close_min);
 
+   // 6. Signal Evaluation
    if(in_ny_session && g_london_qualified && !g_trade.is_open)
    {
-      EvaluateGoldSignal();
+      EvaluateGoldH17Signal();
    }
 
-   string state_str = in_ny_session ? (g_london_qualified ? "ACTIVE (MONITORING SWEEPS)" : "SKIPPED (RANGE < 55.0 pts)") : "OUTSIDE NY SESSION";
+   // 7. Update on-chart status dashboard
+   string state_str = in_ny_session ? (g_london_qualified ? "ACTIVE (MONITORING SWEEPS)" : "SKIPPED (RANGE < 55pts)") : "OUTSIDE NY SESSION";
    if(g_trade.is_open)
-      state_str = StringFormat("IN TRADE [%s] Ticket #%d", g_trade.direction, g_trade.ticket);
-
+   {
+      state_str = StringFormat("IN TRADE #%d (%s) | PnL: %s",
+                               g_trade.ticket, g_trade.direction,
+                               g_trade.tp1_closed ? "TP1 SECURED + RUNNING" : "OPEN");
+   }
    UpdateDashboard(state_str);
 }
 
 //+------------------------------------------------------------------+
-//| Calculate London Session High & Low                              |
+//| Calculate London High, Low, Midpoint for today                   |
 //+------------------------------------------------------------------+
-void CalculateLondonLevels(datetime day_start)
+void CalculateLondonLevels(datetime day)
 {
-   datetime lon_start = day_start + LONDON_START_HOUR * 3600;
-   datetime lon_end   = day_start + LONDON_END_HOUR * 3600;
+   datetime london_start = day + LONDON_START_HOUR * 3600;
+   datetime london_end   = day + LONDON_END_HOUR   * 3600;
 
-   int start_idx = iBarShift(_Symbol, PERIOD_M1, lon_start);
-   int end_idx   = iBarShift(_Symbol, PERIOD_M1, lon_end);
+   int start_bar = iBarShift(_Symbol, PERIOD_M1, london_start);
+   int end_bar   = iBarShift(_Symbol, PERIOD_M1, london_end);
 
-   if(start_idx < 0 || end_idx < 0 || start_idx <= end_idx)
+   if(start_bar < 0 || end_bar < 0 || start_bar <= end_bar)
       return;
 
-   int count = start_idx - end_idx + 1;
-   int highest_idx = iHighest(_Symbol, PERIOD_M1, MODE_HIGH, count, end_idx);
-   int lowest_idx  = iLowest(_Symbol, PERIOD_M1, MODE_LOW, count, end_idx);
+   int count = start_bar - end_bar + 1;
+   double highs[], lows[];
+   ArraySetAsSeries(highs, true);
+   ArraySetAsSeries(lows, true);
 
-   if(highest_idx >= 0 && lowest_idx >= 0)
-   {
-      g_london_high      = iHigh(_Symbol, PERIOD_M1, highest_idx);
-      g_london_low       = iLow(_Symbol, PERIOD_M1, lowest_idx);
-      g_london_mid       = (g_london_high + g_london_low) / 2.0;
-      g_london_range     = g_london_high - g_london_low;
-      g_london_qualified = (g_london_range >= InpMinLondonRange);
+   if(CopyHigh(_Symbol, PERIOD_M1, end_bar, count, highs) < count) return;
+   if(CopyLow(_Symbol, PERIOD_M1, end_bar, count, lows) < count) return;
 
-      DrawHLine("AURUM_GOLD_LH", g_london_high, clrGold, "Gold London High");
-      DrawHLine("AURUM_GOLD_LL", g_london_low, clrGold, "Gold London Low");
-      DrawHLine("AURUM_GOLD_MID", g_london_mid, clrDarkGray, "Gold London Midpoint", STYLE_DOT);
-   }
+   g_london_high  = highs[ArrayMaximum(highs)];
+   g_london_low   = lows[ArrayMinimum(lows)];
+   g_london_range = g_london_high - g_london_low;
+   g_london_mid   = (g_london_high + g_london_low) / 2.0;
+
+   g_london_qualified = (g_london_range >= InpMinLondonRange);
+
+   // Draw visual levels
+   DrawHLine("AURUM_GOLD_LH",  g_london_high, clrRed,        StringFormat("Gold London High (%.2f)", g_london_high));
+   DrawHLine("AURUM_GOLD_LL",  g_london_low,  clrDodgerBlue, StringFormat("Gold London Low (%.2f)", g_london_low));
+   DrawHLine("AURUM_GOLD_MID", g_london_mid,  clrGold,       StringFormat("Gold London Midpoint (%.2f)", g_london_mid));
 }
 
 //+------------------------------------------------------------------+
-//| Evaluate Gold Sweep Signal on Bar 1                              |
+//| Evaluate Gold Sweep-Reclaim Setup on Bar Close                   |
 //+------------------------------------------------------------------+
-void EvaluateGoldSignal()
+void EvaluateGoldH17Signal()
 {
-   double atr[];
-   ArraySetAsSeries(atr, true);
-   if(CopyBuffer(g_atr_handle, 0, 1, 1, atr) <= 0) return;
-   double current_atr = atr[0];
-
    MqlRates rates[];
    ArraySetAsSeries(rates, true);
-   if(CopyRates(_Symbol, PERIOD_M1, 1, 2, rates) < 2) return;
+   if(CopyRates(_Symbol, PERIOD_M1, 1, 2, rates) < 2)
+      return;
 
-   MqlRates r = rates[0];
-   double c_range = MathMax(r.high - r.low, 0.01);
+   double atr[];
+   ArraySetAsSeries(atr, true);
+   if(CopyBuffer(g_atr_handle, 0, 1, 1, atr) < 1)
+      return;
+
+   double current_atr  = atr[0];
+   double sweep_buffer = InpSweepBufferATR * current_atr;
+
+   MqlRates r = rates[0]; // just completed bar
+   double c_range = r.high - r.low;
+   if(c_range <= 0) return;
+
    double upper_wick = r.high - MathMax(r.open, r.close);
    double lower_wick = MathMin(r.open, r.close) - r.low;
-   double sweep_buffer = MathMax(InpSweepBufferATR * current_atr, 0.50);
 
    // 1. Bearish Sweep of London High
    bool swept_h = (r.high >= g_london_high + sweep_buffer);
    bool reclaimed_h = (r.close < g_london_high && r.close > g_london_low);
-   bool bearish_confirm = (r.close < r.open || (upper_wick >= 0.20 * c_range));
+   bool bearish_confirm = (r.close < r.open || (upper_wick >= 0.25 * c_range));
 
    if(swept_h && reclaimed_h && bearish_confirm)
    {
@@ -235,7 +263,7 @@ void EvaluateGoldSignal()
       double tp    = g_london_mid;
       double risk  = sl - entry;
 
-      if(risk > 0.50 && risk < 15.0 && tp < entry && (entry - tp) / risk >= 1.25)
+      if(risk > 0 && tp < entry && (entry - tp) / risk >= 1.25)
       {
          ExecuteOrder("SELL", entry, sl, tp, risk);
          return;
@@ -245,7 +273,7 @@ void EvaluateGoldSignal()
    // 2. Bullish Sweep of London Low
    bool swept_l = (r.low <= g_london_low - sweep_buffer);
    bool reclaimed_l = (r.close > g_london_low && r.close < g_london_high);
-   bool bullish_confirm = (r.close > r.open || (lower_wick >= 0.20 * c_range));
+   bool bullish_confirm = (r.close > r.open || (lower_wick >= 0.25 * c_range));
 
    if(swept_l && reclaimed_l && bullish_confirm)
    {
@@ -254,7 +282,7 @@ void EvaluateGoldSignal()
       double tp    = g_london_mid;
       double risk  = entry - sl;
 
-      if(risk > 0.50 && risk < 15.0 && tp > entry && (tp - entry) / risk >= 1.25)
+      if(risk > 0 && tp > entry && (tp - entry) / risk >= 1.25)
       {
          ExecuteOrder("BUY", entry, sl, tp, risk);
          return;
@@ -263,7 +291,7 @@ void EvaluateGoldSignal()
 }
 
 //+------------------------------------------------------------------+
-//| Execute Virtual Order                                            |
+//| Execute Virtual or Demo Order                                    |
 //+------------------------------------------------------------------+
 void ExecuteOrder(string dir, double entry, double sl, double tp, double risk_pts)
 {
@@ -280,99 +308,197 @@ void ExecuteOrder(string dir, double entry, double sl, double tp, double risk_pt
    g_trade.risk_cash   = risk_cash;
    g_trade.entry_bar   = 0;
    g_trade.is_open     = true;
+   g_trade.tp1_closed  = false;
+   g_trade.tp1_price   = 0.0;
+   g_trade.tp1_cash    = 0.0;
+   g_trade.be_moved    = false;
 
-   DrawHLine("AURUM_GOLD_SL", sl, clrRed, "Gold Stop Loss", STYLE_DASH);
-   DrawHLine("AURUM_GOLD_TP", tp, clrGreen, "Gold Take Profit", STYLE_DASH);
+   // Visual lines on chart
+   DrawHLine("AURUM_GOLD_SL", sl, clrRed, "Stop Loss", STYLE_DASH);
+   DrawHLine("AURUM_GOLD_TP", tp, clrGreen, "Take Profit (Midpoint)", STYLE_DASH);
 
-   string alert_msg = StringFormat("[AURUM GOLD H17] %s ORDER #%d | Entry: %.2f | SL: %.2f | TP: %.2f | Risk: $%.2f (1R)",
+   string alert_msg = StringFormat("[AURUM GOLD H17 v1.1] %s ORDER #%d | Entry: %.2f | SL: %.2f | TP: %.2f | Risk: $%.2f (1R)",
                                    dir, g_trade.ticket, entry, sl, tp, risk_cash);
    Print(alert_msg);
    Alert(alert_msg);
 
+   // Log to CSV
    LogTradeToCsv(g_trade, "OPEN", 0.0, 0.0, "");
 }
 
 //+------------------------------------------------------------------+
-//| Check Virtual Trade Exit on Tick                                 |
+//| Check Virtual Trade Exit on Tick with Trailing & TP1             |
 //+------------------------------------------------------------------+
 void CheckVirtualTradeExit(const MqlTick &tick)
 {
-   bool hit_tp = false;
-   bool hit_sl = false;
-   double exit_price = 0.0;
-   string reason = "";
+   double current_price = (g_trade.direction == "BUY") ? tick.bid : tick.ask;
+   double favorable_pts = (g_trade.direction == "BUY") ? (current_price - g_trade.entry_price) : (g_trade.entry_price - current_price);
 
-   if(g_trade.direction == "BUY")
+   // 1. Check Partial TP1
+   if(InpEnableHybridTP1 && !g_trade.tp1_closed)
    {
-      if(tick.bid >= g_trade.tp) { hit_tp = true; exit_price = g_trade.tp; reason = "TP"; }
-      else if(tick.bid <= g_trade.sl) { hit_sl = true; exit_price = g_trade.sl; reason = "SL"; }
-   }
-   else
-   {
-      if(tick.ask <= g_trade.tp) { hit_tp = true; exit_price = g_trade.tp; reason = "TP"; }
-      else if(tick.ask >= g_trade.sl) { hit_sl = true; exit_price = g_trade.sl; reason = "SL"; }
-   }
-
-   if(!hit_tp && !hit_sl)
-   {
-      int bars_held = iBarShift(_Symbol, PERIOD_M1, g_trade.entry_time);
-      if(bars_held >= InpMaxHoldBars)
+      if(favorable_pts >= InpTP1Points)
       {
-         exit_price = (g_trade.direction == "BUY") ? tick.bid : tick.ask;
-         reason = "TIME";
+         g_trade.tp1_closed = true;
+         g_trade.tp1_price  = current_price;
+         g_trade.tp1_cash   = (InpTP1Points * 0.5 * g_trade.units);
+         
+         // Move Stop Loss to Breakeven
+         if(InpEnableBreakeven)
+         {
+            g_trade.sl = g_trade.entry_price;
+            g_trade.be_moved = true;
+            DrawHLine("AURUM_GOLD_SL", g_trade.sl, clrGold, "Stop Loss (BREAKEVEN)", STYLE_DASH);
+         }
+         
+         string tp1_msg = StringFormat("[AURUM GOLD H17] TP1 REACHED #%d at %.2f (+%.1f pts) | 50%% Banked ($%.2f) | SL Moved to Breakeven",
+                                       g_trade.ticket, current_price, InpTP1Points, g_trade.tp1_cash);
+         Print(tp1_msg);
       }
    }
 
-   if(exit_price > 0.0)
+   // 2. Dynamic Multi-Stage Trailing Stop (active after TP1 or if BE locked)
+   if(InpEnableTrailing && g_trade.tp1_closed)
    {
-      double pts = (g_trade.direction == "BUY") ? (exit_price - g_trade.entry_price) : (g_trade.entry_price - exit_price);
-      double pnl = pts * g_trade.units;
-      double r_mult = (g_trade.risk_cash > 0) ? (pnl / g_trade.risk_cash) : 0.0;
+      // Stage 2: Lock profit at Step 2
+      if(favorable_pts >= InpTrailStep2Pts)
+      {
+         double target_sl = (g_trade.direction == "BUY") ? (g_trade.entry_price + InpTrailLock2Pts) : (g_trade.entry_price - InpTrailLock2Pts);
+         bool should_update = (g_trade.direction == "BUY") ? (target_sl > g_trade.sl) : (target_sl < g_trade.sl);
+         if(should_update)
+         {
+            g_trade.sl = target_sl;
+            DrawHLine("AURUM_GOLD_SL", g_trade.sl, clrDodgerBlue, "Stop Loss (TRAIL 2)", STYLE_DASH);
+         }
+      }
+      // Stage 1: Lock profit at Step 1
+      else if(favorable_pts >= InpTrailStep1Pts)
+      {
+         double target_sl = (g_trade.direction == "BUY") ? (g_trade.entry_price + InpTrailLock1Pts) : (g_trade.entry_price - InpTrailLock1Pts);
+         bool should_update = (g_trade.direction == "BUY") ? (target_sl > g_trade.sl) : (target_sl < g_trade.sl);
+         if(should_update)
+         {
+            g_trade.sl = target_sl;
+            DrawHLine("AURUM_GOLD_SL", g_trade.sl, clrDodgerBlue, "Stop Loss (TRAIL 1)", STYLE_DASH);
+         }
+      }
+   }
 
-      g_virtual_balance += pnl;
+   // 3. Check SL Hit
+   bool hit_sl = false;
+   if(g_trade.direction == "BUY" && tick.bid <= g_trade.sl) hit_sl = true;
+   else if(g_trade.direction == "SELL" && tick.ask >= g_trade.sl) hit_sl = true;
+
+   // 4. Check Final TP Hit (Midpoint)
+   bool hit_tp = false;
+   if(g_trade.direction == "BUY" && tick.bid >= g_trade.tp) hit_tp = true;
+   else if(g_trade.direction == "SELL" && tick.ask <= g_trade.tp) hit_tp = true;
+
+   // 5. Time Exit (120 bars)
+   bool hit_time = false;
+   if(!hit_tp && !hit_sl)
+   {
+      int bars_held = iBarShift(_Symbol, PERIOD_M1, g_trade.entry_time);
+      if(bars_held >= InpMaxHoldBars) hit_time = true;
+   }
+
+   if(hit_sl || hit_tp || hit_time)
+   {
+      double exit_price = current_price;
+      string reason = hit_tp ? "TP_FULL" : (hit_sl ? (g_trade.be_moved ? "BE_STOP" : "SL") : "TIME");
+      
+      double p2_pts = (g_trade.direction == "BUY") ? (exit_price - g_trade.entry_price) : (g_trade.entry_price - exit_price);
+      double p2_units = g_trade.tp1_closed ? (0.5 * g_trade.units) : g_trade.units;
+      double p2_cash = p2_pts * p2_units;
+      
+      double total_pnl = g_trade.tp1_cash + p2_cash;
+      double r_mult = (g_trade.risk_cash > 0) ? (total_pnl / g_trade.risk_cash) : 0.0;
+      
+      g_virtual_balance += total_pnl;
       g_trade.is_open = false;
-
+      
       ObjectDelete(0, "AURUM_GOLD_SL");
       ObjectDelete(0, "AURUM_GOLD_TP");
-
-      string close_msg = StringFormat("[AURUM GOLD H17] CLOSED #%d by %s | PnL: $%.2f (%+.2fR) | Balance: $%.2f",
-                                      g_trade.ticket, reason, pnl, r_mult, g_virtual_balance);
+      
+      string close_msg = StringFormat("[AURUM GOLD H17 v1.1] CLOSED #%d by %s | Net PnL: $%.2f (%+.2fR) | Balance: $%.2f",
+                                      g_trade.ticket, reason, total_pnl, r_mult, g_virtual_balance);
       Print(close_msg);
       Alert(close_msg);
-
-      LogTradeToCsv(g_trade, "CLOSED", pnl, r_mult, reason);
+      
+      LogTradeToCsv(g_trade, "CLOSED", total_pnl, r_mult, reason);
    }
 }
 
 //+------------------------------------------------------------------+
-//| On-chart Dashboard Display                                       |
+//| Chart Dashboard Display                                          |
 //+------------------------------------------------------------------+
 void UpdateDashboard(string status_text)
 {
    string q_text = g_london_qualified ? "QUALIFIED (>= 55.0 pts)" : "UNQUALIFIED (< 55.0 pts)";
    string dash = StringFormat(
-      "====================================================\n"
-      " AURUM v0.8 GOLD SHADOW ENGINE [XAU_H17]\n"
-      " Symbol: %s | Mode: %s\n"
-      "----------------------------------------------------\n"
-      " London High: %.2f | London Low: %.2f\n"
-      " London Range: %.2f pts [%s]\n"
-      " London Midpoint Target: %.2f\n"
-      "----------------------------------------------------\n"
-      " Engine Status: %s\n"
-      " Virtual Account Balance: $%.2f\n"
-      "====================================================",
-      _Symbol, InpVirtualMode ? "VIRTUAL PAPER (ZERO RISK)" : "DEMO BROKER",
-      g_london_high, g_london_low, g_london_range, q_text, g_london_mid,
-      status_text, g_virtual_balance
+      "=== AURUM v0.9 DUAL-ASSET SHADOW DESK ===\n"
+      "Symbol: %s | Mode: %s | Hybrid TP1: %s (%.1f pts)\n"
+      "Virtual Balance: $%.2f\n"
+      "London High: %.2f | Low: %.2f | Mid: %.2f\n"
+      "London Range: %.2f pts [%s]\n"
+      "Engine Status: %s\n"
+      "Trailing Mode: %s (Step1: +%.0f pts | Step2: +%.0f pts)",
+      _Symbol, InpVirtualMode ? "VIRTUAL PAPER" : "DEMO/LIVE",
+      InpEnableHybridTP1 ? "ENABLED" : "DISABLED", InpTP1Points,
+      g_virtual_balance,
+      g_london_high, g_london_low, g_london_mid,
+      g_london_range, q_text,
+      status_text,
+      InpEnableTrailing ? "ACTIVE" : "OFF", InpTrailStep1Pts, InpTrailStep2Pts
    );
    Comment(dash);
 }
 
 //+------------------------------------------------------------------+
-//| Draw Horizontal Line Helper                                      |
+//| CSV Logger for Python Daemon Interoperability                    |
 //+------------------------------------------------------------------+
-void DrawHLine(string name, double price, color clr, string desc, ENUM_LINE_STYLE style=STYLE_DASH)
+void InitCsvLog()
+{
+   int handle = FileOpen("aurum_gold_shadow_trades.csv", FILE_READ | FILE_WRITE | FILE_CSV | FILE_COMMON);
+   if(handle == INVALID_HANDLE)
+   {
+      handle = FileOpen("aurum_gold_shadow_trades.csv", FILE_WRITE | FILE_CSV);
+      if(handle != INVALID_HANDLE)
+      {
+         FileWrite(handle, "ticket", "time", "action", "symbol", "direction", "entry", "sl", "tp", "pnl", "r_mult", "reason", "balance");
+         FileClose(handle);
+      }
+   }
+   else
+   {
+      FileClose(handle);
+   }
+}
+
+void LogTradeToCsv(const VirtualTrade &t, string action, double pnl, double r_mult, string reason)
+{
+   int handle = FileOpen("aurum_gold_shadow_trades.csv", FILE_READ | FILE_WRITE | FILE_CSV);
+   if(handle != INVALID_HANDLE)
+   {
+      FileSeek(handle, 0, SEEK_END);
+      FileWrite(handle,
+                t.ticket,
+                TimeToString(TimeCurrent(), TIME_DATE | TIME_MINUTES),
+                action,
+                _Symbol,
+                t.direction,
+                DoubleToString(t.entry_price, 2),
+                DoubleToString(t.sl, 2),
+                DoubleToString(t.tp, 2),
+                DoubleToString(pnl, 2),
+                DoubleToString(r_mult, 2),
+                reason,
+                DoubleToString(g_virtual_balance, 2));
+      FileClose(handle);
+   }
+}
+
+void DrawHLine(string name, double price, color clr, string text, ENUM_LINE_STYLE style=STYLE_SOLID)
 {
    if(ObjectFind(0, name) < 0)
    {
@@ -382,34 +508,5 @@ void DrawHLine(string name, double price, color clr, string desc, ENUM_LINE_STYL
    ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
    ObjectSetInteger(0, name, OBJPROP_STYLE, style);
    ObjectSetInteger(0, name, OBJPROP_WIDTH, 1);
-   ObjectSetString(0, name, OBJPROP_TEXT, desc);
-}
-
-//+------------------------------------------------------------------+
-//| CSV Logging in MQL5/Files/                                       |
-//+------------------------------------------------------------------+
-void InitCsvLog()
-{
-   int file = FileOpen("aurum_gold_shadow_trades.csv", FILE_READ | FILE_WRITE | FILE_CSV);
-   if(file != INVALID_HANDLE)
-   {
-      if(FileSize(file) == 0)
-      {
-         FileWrite(file, "ticket", "time", "action", "symbol", "direction", "entry", "sl", "tp", "pnl", "r_mult", "reason", "balance");
-      }
-      FileClose(file);
-   }
-}
-
-void LogTradeToCsv(const VirtualTrade &t, string action, double pnl, double r_mult, string reason)
-{
-   int file = FileOpen("aurum_gold_shadow_trades.csv", FILE_READ | FILE_WRITE | FILE_CSV);
-   if(file != INVALID_HANDLE)
-   {
-      FileSeek(file, 0, SEEK_END);
-      FileWrite(file, t.ticket, TimeToString(TimeCurrent()), action, _Symbol, t.direction,
-                DoubleToString(t.entry_price, 2), DoubleToString(t.sl, 2), DoubleToString(t.tp, 2),
-                DoubleToString(pnl, 2), DoubleToString(r_mult, 2), reason, DoubleToString(g_virtual_balance, 2));
-      FileClose(file);
-   }
+   ObjectSetString(0, name, OBJPROP_TOOLTIP, text);
 }

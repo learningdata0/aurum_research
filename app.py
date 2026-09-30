@@ -412,31 +412,38 @@ with tab4:
 with tab5:
     st.subheader("🔬 Institutional Validation Battery & Stress Tests")
     
-    t1, t2, t3 = st.columns(3)
+    t1, t2, t3, t4 = st.columns(4)
     with t1:
         st.markdown("""
-        ### 🔄 Walk-Forward Validation
-        - **WFE (US100):** 1.54 (> 0.50 threshold)
-        - **WFE (XAUUSD):** 1.63 (> 0.50 threshold)
+        ### 🔄 Walk-Forward
+        - **WFE (US100):** 1.54
+        - **WFE (XAUUSD):** 1.63
         - **Status:** **PASSED**
-        - Confirms strategy logic holds out-of-sample across rolling regimes without overfitting.
+        - No overfitting.
         """)
     with t2:
         st.markdown("""
-        ### 🎲 Monte Carlo (10,000 Runs)
-        - **P(Drawdown > 5% - Gold):** 4.8%
-        - **P(Drawdown > 10% - US100):** 2.1%
+        ### 🎲 Monte Carlo
+        - **P(DD > 5% Gold):** 4.8%
+        - **P(DD > 10% US100):** 2.1%
         - **P(Ruin):** < 0.01%
         - **Status:** **PASSED**
-        - Assures maximum capital preservation in multi-month trading runs.
         """)
     with t3:
         st.markdown("""
-        ### ⚡ 2x Spread Stress Test
-        - **US100 PF (2x Spread):** 1.06
-        - **Gold PF (2x Spread):** 1.44
+        ### ⚡ 2x Spread Stress
+        - **US100 PF:** 1.06
+        - **Gold PF:** 1.44
         - **Status:** **PASSED**
-        - Strategy retains structural edge even during volatile news spreads.
+        - Positive edge in high spreads.
+        """)
+    with t4:
+        st.markdown("""
+        ### 🎯 Trailing & TP1 Study
+        - **Win Rate:** 19.7% ➔ **57.6%**
+        - **Max Drawdown:** 66R ➔ **30R** (-53%)
+        - **Status:** **INTEGRATED v1.1**
+        - 50% TP1 + BE + Trailing.
         """)
 
 st.markdown("---")

@@ -59,6 +59,7 @@ nav:
       - Intraday Market Clock: strategies/market_clock.md
   - Validation & Research Lab:
       - Institutional Research Report: research/institutional_lab.md
+      - Trailing Stop & TP1 Empirical Study: research/trailing_and_flip_study.md
   - Episodic Market Memory:
       - Causal Macro Journal: memory/journal.md
   - Live Gate 2 Execution:

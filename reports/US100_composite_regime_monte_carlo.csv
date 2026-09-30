@@ -1,0 +1,2 @@
+iterations,mean_expectancy_R,ci_95_lower_R,ci_95_upper_R,median_max_dd_pct,dd_95th_percentile_pct,worst_max_dd_pct,prob_dd_over_5pct,prob_dd_over_10pct,prob_profitable
+1000,0.27,-0.53,1.08,0.75,1.52,2.28,0.0,0.0,70.5

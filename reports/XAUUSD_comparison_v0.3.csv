@@ -1,0 +1,7 @@
+trades,wins,losses,win_rate_pct,profit_factor,net_pnl,expectancy_R,avg_win_R,avg_loss_R,max_drawdown_pct,final_balance,symbol,strategy
+17,6,11,35.29,1.41,113.19,0.27,2.6,-1.0,1.0,10113.19,XAUUSD,boundary_reversion
+16,5,11,31.25,1.28,76.84,0.2,2.83,-1.0,1.0,10076.84,XAUUSD,sweep_reclaim
+4,0,4,0.0,0.0,-99.63,-1.0,0.0,-1.0,0.75,9900.37,XAUUSD,micro_range
+5,1,4,20.0,0.32,-68.14,-0.55,1.27,-1.0,1.0,9931.86,XAUUSD,breakout
+4,0,4,0.0,0.0,-99.63,-1.0,0.0,-1.0,0.75,9900.37,XAUUSD,breakout_retest
+4,0,4,0.0,0.0,-99.63,-1.0,0.0,-1.0,0.75,9900.37,XAUUSD,composite_regime

@@ -1,0 +1,27 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Operating System
+.DS_Store
+Thumbs.db
+
+# Large Data & Backups
+data/*.csv
+!data/.gitkeep
+Temp/
+site/
+*.zip
+*.xlsx
+aurum_research_v0.*/
+scratch/
+
+# Private Credentials
+config/telegram.json
+.env
+
+# Streamlit
+.streamlit/secrets.toml

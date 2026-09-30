@@ -1,0 +1,7 @@
+trades,wins,losses,win_rate_pct,profit_factor,net_pnl,expectancy_R,avg_win_R,avg_loss_R,max_drawdown_pct,final_balance,symbol,strategy
+7,1,6,14.29,0.61,-58.44,-0.33,3.68,-1.0,1.0,9941.56,US30,boundary_reversion
+11,4,7,36.36,1.2,34.74,0.13,2.1,-1.0,1.0,10034.74,US30,sweep_reclaim
+6,1,5,16.67,0.25,-93.0,-0.62,1.27,-1.0,1.0,9907.0,US30,micro_range
+10,4,6,40.0,0.95,-8.23,-0.03,1.42,-1.0,1.0,9991.77,US30,breakout
+4,0,4,0.0,0.0,-99.63,-1.0,0.0,-1.0,0.75,9900.37,US30,breakout_retest
+17,6,11,35.29,1.1,28.72,0.07,2.03,-1.0,1.0,10028.72,US30,composite_regime

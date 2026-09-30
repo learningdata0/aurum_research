@@ -1,0 +1,8 @@
+scenario,comm_per_unit,slippage_points,trades,win_rate_pct,profit_factor,expectancy_R,net_pnl,max_drawdown_pct,final_balance
+Frictionless,0.0,0.0,4,0.0,0.0,-1.0,-99.63,0.75,9900.37
+Base Costs (1x),0.5,0.25,4,0.0,0.0,-2.0,-198.44,1.26,9801.56
++25% Spread,0.62,0.25,4,0.0,0.0,-2.17,-214.85,1.35,9785.15
++50% Spread,0.75,0.5,4,0.0,0.0,-2.24,-221.93,1.18,9778.07
++100% Spread (2x),1.0,0.75,4,0.0,0.0,-2.73,-270.64,1.35,9729.36
+High Slippage (5t),0.75,1.25,4,0.0,0.0,-3.04,-300.75,1.49,9699.25
+Severe Stress (10t),1.0,2.5,4,0.0,0.0,-4.57,-450.17,2.05,9549.83

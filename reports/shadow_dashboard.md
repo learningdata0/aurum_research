@@ -1,7 +1,7 @@
 # AURUM v0.8 Dual-Asset Forward Shadow Execution Dashboard
-**Updated:** 2026-10-01 19:20:04 UTC  
+**Updated:** 2026-10-01 19:25:53 UTC  
 **Mode:** Virtual Forward Paper Trading (Zero Real Financial Risk)  
-**Active Portfolio:** US100 (`H17` Range $\ge 140$ pts) + XAUUSD (`XAU_H17` Range $\ge 55$ pts)  
+**Active Portfolio:** US100 (`H17` Range $\ge 140$ pts) + XAUUSD (`XAU_H17` Range $\ge 25$ pts)  
 **Status:** Dual Autonomous Execution Active
 
 ---

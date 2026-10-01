@@ -472,6 +472,16 @@ class ShadowTradingDaemon:
                     synced = self.sync_from_mt5(base_dir)
                     if synced:
                         print(f"[{datetime.now(timezone.utc).strftime('%H:%M:%S UTC')}] Synced live trades from MT5 EAs. Dashboard updated.")
+                        try:
+                            import subprocess
+                            subprocess.run(["git", "add", "reports/"], check=False, capture_output=True)
+                            c_res = subprocess.run(["git", "commit", "-m", f"chore(live): sync gate 2 trades {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}"], check=False, capture_output=True)
+                            if c_res.returncode == 0:
+                                p_res = subprocess.run(["git", "push"], check=False, capture_output=True)
+                                if p_res.returncode == 0:
+                                    print("[AUTO-PUSH] Reports pushed to GitHub — Streamlit Cloud live sync complete.")
+                        except Exception as pe:
+                            print(f"[AUTO-PUSH ERROR] {pe}")
                 time.sleep(poll_interval)
             except KeyboardInterrupt:
                 print("\n[AURUM WATCH] Stopped.")

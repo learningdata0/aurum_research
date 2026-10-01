@@ -72,6 +72,8 @@ double       g_virtual_balance;
 int          g_ticket_counter;
 datetime     g_last_bar_time;
 datetime     g_last_loss_time;
+datetime     g_last_radar_h;
+datetime     g_last_radar_l;
 
 // Today's HTF Levels
 double   g_london_high;
@@ -83,6 +85,10 @@ datetime g_current_day;
 
 int      g_atr_handle;
 
+// Forward declarations
+void CheckRadarAlerts(const MqlTick &tick);
+void LogRadarToCsv(string dir, double trigger_lvl, double est_entry, double est_sl, double tp1, double tp2, double tp3, double tp4);
+
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
 //+------------------------------------------------------------------+
@@ -93,6 +99,8 @@ int OnInit()
    g_trade.is_open    = false;
    g_last_bar_time    = 0;
    g_last_loss_time   = 0;
+   g_last_radar_h     = 0;
+   g_last_radar_l     = 0;
    g_current_day      = 0;
 
    g_london_high      = 0.0;
@@ -141,13 +149,18 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
 {
-   // 1. Check open virtual trade for TP/SL touch and trailing stop on every tick
-   if(g_trade.is_open)
+   MqlTick tick;
+   if(SymbolInfoTick(_Symbol, tick))
    {
-      MqlTick tick;
-      if(SymbolInfoTick(_Symbol, tick))
+      // 1. Check open virtual trade for TP/SL touch and trailing stop
+      if(g_trade.is_open)
       {
          CheckVirtualTradeExit(tick);
+      }
+      else
+      {
+         // Check liquidity sweep pre-entry radar alerts
+         CheckRadarAlerts(tick);
       }
    }
 
@@ -533,4 +546,60 @@ void DrawHLine(string name, double price, color clr, string text, ENUM_LINE_STYL
    ObjectSetInteger(0, name, OBJPROP_STYLE, style);
    ObjectSetInteger(0, name, OBJPROP_WIDTH, 1);
    ObjectSetString(0, name, OBJPROP_TOOLTIP, text);
+}
+
+//+------------------------------------------------------------------+
+//| Pre-Entry Radar Detection & CSV Logging                          |
+//+------------------------------------------------------------------+
+void CheckRadarAlerts(const MqlTick &tick)
+{
+   if(!g_london_qualified || g_trade.is_open)
+      return;
+
+   // 1. Bearish Radar: Price pierces London High
+   if(tick.bid >= g_london_high && TimeCurrent() > g_last_radar_h + 600)
+   {
+      g_last_radar_h = TimeCurrent();
+      double est_entry = tick.bid;
+      double est_sl    = tick.bid + InpMinSLPoints;
+      double tp1       = est_entry - InpTP1Points;
+      double tp2       = est_entry - (2.0 * InpTP1Points);
+      double tp3       = g_london_mid;
+      double tp4       = g_london_low;
+      LogRadarToCsv("SELL", g_london_high, est_entry, est_sl, tp1, tp2, tp3, tp4);
+   }
+
+   // 2. Bullish Radar: Price pierces London Low
+   if(tick.ask <= g_london_low && TimeCurrent() > g_last_radar_l + 600)
+   {
+      g_last_radar_l = TimeCurrent();
+      double est_entry = tick.ask;
+      double est_sl    = tick.ask - InpMinSLPoints;
+      double tp1       = est_entry + InpTP1Points;
+      double tp2       = est_entry + (2.0 * InpTP1Points);
+      double tp3       = g_london_mid;
+      double tp4       = g_london_high;
+      LogRadarToCsv("BUY", g_london_low, est_entry, est_sl, tp1, tp2, tp3, tp4);
+   }
+}
+
+void LogRadarToCsv(string dir, double trigger_lvl, double est_entry, double est_sl, double tp1, double tp2, double tp3, double tp4)
+{
+   int handle = FileOpen("aurum_radar.csv", FILE_READ | FILE_WRITE | FILE_CSV);
+   if(handle != INVALID_HANDLE)
+   {
+      FileSeek(handle, 0, SEEK_END);
+      FileWrite(handle,
+                TimeToString(TimeCurrent(), TIME_DATE | TIME_MINUTES),
+                _Symbol,
+                dir,
+                DoubleToString(trigger_lvl, 2),
+                DoubleToString(est_entry, 2),
+                DoubleToString(est_sl, 2),
+                DoubleToString(tp1, 2),
+                DoubleToString(tp2, 2),
+                DoubleToString(tp3, 2),
+                DoubleToString(tp4, 2));
+      FileClose(handle);
+   }
 }

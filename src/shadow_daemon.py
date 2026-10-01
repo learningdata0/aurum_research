@@ -65,6 +65,7 @@ class ShadowTradingDaemon:
         self.notifier = TelegramNotifier()
         self._notified_open_tickets = set()
         self._notified_closed_tickets = set()
+        self._notified_radar = set()
 
         # Load existing trades if any
         if self.csv_log.exists():
@@ -415,14 +416,40 @@ class ShadowTradingDaemon:
                 t_id = int(r.ticket)
                 if t_id not in self._notified_open_tickets:
                     self._notified_open_tickets.add(t_id)
+                    asset_name = r.get("asset", "US100")
+                    is_gold = "XAU" in str(asset_name).upper()
+                    entry_val = float(r.entry)
+                    sl_val = float(r.sl)
+                    tp_val = float(r.tp)
+                    tp1_step = 4.0 if is_gold else 15.0
+                    tp2_step = 8.0 if is_gold else 30.0
+
+                    if str(r.direction).upper() == "BUY":
+                        tp1_lvl = entry_val + tp1_step
+                        tp2_lvl = entry_val + tp2_step
+                        tp3_lvl = tp_val
+                        tp4_lvl = tp_val + abs(tp_val - entry_val)
+                    else:
+                        tp1_lvl = entry_val - tp1_step
+                        tp2_lvl = entry_val - tp2_step
+                        tp3_lvl = tp_val
+                        tp4_lvl = tp_val - abs(entry_val - tp_val)
+
                     self.notifier.send_trade_open_alert(
-                        asset=r.get("asset", "US100"),
+                        asset=asset_name,
                         direction=str(r.direction),
                         ticket=t_id,
-                        entry=float(r.entry),
-                        sl=float(r.sl),
-                        tp=float(r.tp),
-                        risk_cash=risk_cash
+                        entry=entry_val,
+                        sl=sl_val,
+                        tp1=tp1_lvl,
+                        tp2=tp2_lvl,
+                        tp3=tp3_lvl,
+                        tp4=tp4_lvl,
+                        units=0.09 if is_gold else 1.0,
+                        risk_cash=risk_cash,
+                        risk_pct=0.25,
+                        timeframe="PERIOD_M1",
+                        mode="Single Entry Multi-TP"
                     )
 
         dash += """\n---\n\n### Closed Forward Executions
@@ -451,7 +478,49 @@ class ShadowTradingDaemon:
             f.write(dash)
         return True
 
-    def run_watch(self, poll_interval: int = 15):
+    def sync_radar(self, base_dir: str):
+        radar_fp = Path(base_dir) / "aurum_radar.csv"
+        if not radar_fp.exists():
+            return
+        try:
+            content = ""
+            for enc in ["utf-16le", "utf-8"]:
+                try:
+                    with open(radar_fp, "r", encoding=enc) as f:
+                        content = f.read()
+                        if content:
+                            break
+                except Exception:
+                    continue
+            if not content:
+                return
+            for line in content.splitlines():
+                parts = [p.strip() for p in line.split(",") if p.strip()]
+                if len(parts) >= 10:
+                    t_str, sym, dir_str, trig_lvl, e_entry, e_sl, tp1, tp2, tp3, tp4 = parts[:10]
+                    key = f"{t_str}_{sym}_{dir_str}"
+                    if key not in self._notified_radar:
+                        self._notified_radar.add(key)
+                        self.notifier.send_pre_entry_analysis(
+                            asset=sym,
+                            direction=dir_str,
+                            timeframe="PERIOD_M1",
+                            setup=f"London Sweep & Reclaim ({sym})",
+                            trigger_level=float(trig_lvl),
+                            est_entry=float(e_entry),
+                            est_sl=float(e_sl),
+                            tp1=float(tp1),
+                            tp2=float(tp2),
+                            tp3=float(tp3),
+                            tp4=float(tp4),
+                            risk_pct=0.25,
+                            risk_cash=25.0
+                        )
+                        print(f"[RADAR ALERT] Sent pre-entry analysis for {sym} {dir_str} at {e_entry}")
+        except Exception:
+            pass
+
+    def run_watch(self, poll_interval: int = 1):
         print(f"[AURUM WATCH] Monitoring Dual-Asset MT5 Shadow Execution every {poll_interval}s...")
         base_dir = "/Users/nouh/Library/Application Support/net.metaquotes.wine.metatrader5/drive_c/Program Files/MetaTrader 5/MQL5/Files"
         p_base = Path(base_dir)
@@ -459,6 +528,10 @@ class ShadowTradingDaemon:
 
         while True:
             try:
+                # 1. Sync Radar Alerts immediately
+                self.sync_radar(base_dir)
+
+                # 2. Check Execution files
                 changed = False
                 for fname in ["aurum_shadow_trades.csv", "aurum_gold_shadow_trades.csv"]:
                     fp = p_base / fname
@@ -495,7 +568,7 @@ if __name__ == "__main__":
     p.add_argument("--mode", choices=["replay", "sync", "watch"], default="replay", help="Operational mode")
     p.add_argument("--days", type=int, default=14, help="Replay days for shadow demonstration")
     p.add_argument("--reset", action="store_true", help="Reset prior shadow trade history before running")
-    p.add_argument("--interval", type=int, default=15, help="Poll interval in seconds for watch mode")
+    p.add_argument("--interval", type=int, default=1, help="Poll interval in seconds for watch mode")
     a = p.parse_args()
 
     daemon = ShadowTradingDaemon()

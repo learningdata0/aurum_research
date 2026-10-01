@@ -68,23 +68,102 @@ class TelegramNotifier:
             print(f"[TELEGRAM ERROR] Failed to send alert: {e}")
             return False
 
-    def send_trade_open_alert(self, asset: str, direction: str, ticket: int, entry: float, sl: float, tp: float, risk_cash: float = 25.0):
-        emoji = "🟢" if direction.upper() == "BUY" else "🔴"
-        r_points = abs(entry - sl)
-        tp_points = abs(tp - entry)
-        rr_ratio = (tp_points / r_points) if r_points > 0 else 0.0
+    def send_pre_entry_analysis(
+        self,
+        asset: str,
+        direction: str,
+        timeframe: str = "PERIOD_M1",
+        setup: str = "London Sweep & Reclaim (H17)",
+        trigger_level: float = 0.0,
+        est_entry: float = 0.0,
+        est_sl: float = 0.0,
+        tp1: float = 0.0,
+        tp2: float = 0.0,
+        tp3: float = 0.0,
+        tp4: float = 0.0,
+        risk_pct: float = 0.25,
+        risk_cash: float = 25.0
+    ):
+        is_gold = "XAU" in asset.upper()
+        mult = 10.0 if is_gold else 1.0
+        unit_label = "pip" if is_gold else "pt"
+
+        sl_dist = abs(est_entry - est_sl)
+        sl_units = sl_dist * mult
+        tp1_dist = abs(tp1 - est_entry) * mult
+        tp2_dist = abs(tp2 - est_entry) * mult
+        tp3_dist = abs(tp3 - est_entry) * mult
+        tp4_dist = abs(tp4 - est_entry) * mult
+        rr_ratio = (abs(tp3 - est_entry) / sl_dist) if sl_dist > 0 else 0.0
+
+        dir_str = direction.upper()
+        emoji = "🟢" if dir_str == "BUY" else "🔴"
 
         msg = (
-            f"{emoji} *[AURUM TRADE ALERT — NEW EXECUTION]*\n\n"
-            f"• *Asset:* `{asset}`\n"
-            f"• *Direction:* *{direction.upper()}*\n"
-            f"• *Ticket:* `#{ticket}`\n"
-            f"• *Entry Price:* `{entry:,.2f}`\n"
-            f"• *Stop Loss:* `{sl:,.2f}`\n"
-            f"• *Take Profit:* `{tp:,.2f}` (London Midpoint)\n"
-            f"• *Risk Capped:* `${risk_cash:.2f} (1.00R / 0.25%)`\n"
-            f"• *Target R:R:* `1 : {rr_ratio:.2f}R`\n\n"
-            f"⚡ *Institutional Liquidity Sweep-Reclaim Triggered.*"
+            f"🔍 *[{asset} RADAR — PRE-ENTRY DEAL ANALYSIS]*\n\n"
+            f"*Setup:* `{setup}`\n"
+            f"*Market Bias:* *{dir_str}* {emoji}\n"
+            f"*Timeframe:* `{timeframe}`\n\n"
+            f"• *Trigger Level:* `{trigger_level:,.2f}` (Liquidity Sweep)\n"
+            f"• *Projected Entry:* `{est_entry:,.2f}`\n"
+            f"• *Anchor SL:* `{est_sl:,.2f}` ({sl_units:.0f} {unit_label})\n"
+            f"• *TP1 Level:* `{tp1:,.2f}` ({tp1_dist:.0f} {unit_label}) — 50% Bank + BE\n"
+            f"• *TP2 Level:* `{tp2:,.2f}` ({tp2_dist:.0f} {unit_label}) — Trail Lock 1\n"
+            f"• *TP3 Target:* `{tp3:,.2f}` ({tp3_dist:.0f} {unit_label}) — London Midpoint\n"
+            f"• *TP4 Runner:* `{tp4:,.2f}` ({tp4_dist:.0f} {unit_label}) — Opposing Pool\n"
+            f"• *Projected R:R:* `1 : {rr_ratio:.2f}R`\n"
+            f"• *Risk Allocation:* `{risk_pct:.2f}% (${risk_cash:.2f})`\n\n"
+            f"⏳ *Bar confirmation in progress — Awaiting clean execution trigger...*"
+        )
+        return self.send_message(msg)
+
+    def send_trade_open_alert(
+        self,
+        asset: str,
+        direction: str,
+        ticket: int,
+        entry: float,
+        sl: float,
+        tp1: float,
+        tp2: float,
+        tp3: float,
+        tp4: float,
+        units: float = 0.09,
+        risk_cash: float = 25.0,
+        risk_pct: float = 0.25,
+        timeframe: str = "PERIOD_M1",
+        mode: str = "Single Entry Multi-TP"
+    ):
+        dir_str = direction.upper()
+        header = f"🔴 *SELL OPENED*" if dir_str == "SELL" else f"🟢 *BUY OPENED*"
+
+        is_gold = "XAU" in asset.upper()
+        mult = 10.0 if is_gold else 1.0
+        unit_label = "pip" if is_gold else "pt"
+
+        sl_pts = abs(entry - sl)
+        sl_units = sl_pts * mult
+        tp1_units = abs(tp1 - entry) * mult
+        tp2_units = abs(tp2 - entry) * mult
+        tp3_units = abs(tp3 - entry) * mult
+        tp4_units = abs(tp4 - entry) * mult
+
+        msg = (
+            f"{header}\n\n"
+            f"*Symbol:* `{asset}`\n"
+            f"*Timeframe:* `{timeframe}`\n"
+            f"*Ticket:* `#{ticket}`\n\n"
+            f"*Lot / Units:* `{units:.2f}`\n"
+            f"*Entry:* `{entry:,.3f}`\n"
+            f"*Stop Loss:* `{sl:,.3f}` ({sl_units:.0f} {unit_label})\n"
+            f"*TP1 Level:* `{tp1:,.3f}` ({tp1_units:.0f} {unit_label})\n"
+            f"*TP2 Level:* `{tp2:,.3f}` ({tp2_units:.0f} {unit_label})\n"
+            f"*TP3 Target:* `{tp3:,.3f}` ({tp3_units:.0f} {unit_label})\n"
+            f"*TP4 Runner:* `{tp4:,.3f}` ({tp4_units:.0f} {unit_label})\n"
+            f"*Risk:* `{risk_pct:.2f}%` (`${risk_cash:.2f}`)\n"
+            f"*Mode:* `{mode}`\n"
+            f"*TP1 Management:* `Bank 50% Profit + Move SL to Breakeven`\n"
+            f"*TP2 Management:* `Dynamic ATR Multi-Stage Trailing Stop`"
         )
         return self.send_message(msg)
 

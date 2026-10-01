@@ -207,7 +207,7 @@ void OnTick()
    }
 
    // 7. Update on-chart status dashboard
-   string state_str = in_ny_session ? (in_loss_cooldown ? "LOSS COOLDOWN ACTIVE" : (g_london_qualified ? "ACTIVE (MONITORING SWEEPS)" : "SKIPPED (RANGE < 140pts)")) : (in_opening_buffer ? "OPENING BELL BUFFER (15m)" : "OUTSIDE NY SESSION");
+   string state_str = in_ny_session ? (in_loss_cooldown ? "LOSS COOLDOWN ACTIVE" : (g_london_qualified ? "ACTIVE (MONITORING SWEEPS)" : StringFormat("SKIPPED (RANGE < %.1fpts)", InpMinLondonRange))) : (in_opening_buffer ? "OPENING BELL BUFFER (15m)" : "OUTSIDE NY SESSION");
    if(g_trade.is_open)
    {
       state_str = StringFormat("IN TRADE #%d (%s) | PnL: %s",

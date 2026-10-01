@@ -34,6 +34,11 @@ input double InpTrailLock1Pts     = 3.0;      // Profit points locked at Trail S
 input double InpTrailStep2Pts     = 12.0;     // Points in profit to trigger Trail Step 2
 input double InpTrailLock2Pts     = 6.0;      // Profit points locked at Trail Step 2
 
+//--- Pre-Entry Institutional Safeguards (v1.2)
+input int    InpOpeningBufferMin  = 15;       // Opening bell buffer in minutes (16:30 - 16:45)
+input double InpMinSLPoints       = 3.5;      // Minimum Stop Loss floor in points ($3.5/oz)
+input int    InpLossCooldownMin   = 15;       // Cooldown minutes after a loss before re-entering
+
 //--- Session Hour Constants (Broker Time: UTC+3 EEST / UTC+2 EET)
 // Broker is aligned with US-DST (16:30 Broker = 09:30 AM New York)
 const int LONDON_START_HOUR = 10; // 03:00 NY
@@ -66,6 +71,7 @@ VirtualTrade g_trade;
 double       g_virtual_balance;
 int          g_ticket_counter;
 datetime     g_last_bar_time;
+datetime     g_last_loss_time;
 
 // Today's HTF Levels
 double   g_london_high;
@@ -86,6 +92,7 @@ int OnInit()
    g_ticket_counter   = 1000;
    g_trade.is_open    = false;
    g_last_bar_time    = 0;
+   g_last_loss_time   = 0;
    g_current_day      = 0;
 
    g_london_high      = 0.0;
@@ -108,8 +115,8 @@ int OnInit()
    // Draw initial dashboard
    UpdateDashboard("INITIALIZED — WAITING FOR DATA");
 
-   PrintFormat("[AURUM GOLD H17 v1.1] Virtual Shadow Engine initialized on %s (VirtualMode=%s, TP1=%.1f pts, MinLondonRange=%.1f pts)",
-               _Symbol, InpVirtualMode ? "TRUE" : "FALSE", InpTP1Points, InpMinLondonRange);
+   PrintFormat("[AURUM GOLD H17 v1.2] Virtual Shadow Engine initialized on %s (VirtualMode=%s, TP1=%.1f pts, MinSL=%.1f pts, OpenBuffer=%d min, LossCooldown=%d min)",
+               _Symbol, InpVirtualMode ? "TRUE" : "FALSE", InpTP1Points, InpMinSLPoints, InpOpeningBufferMin, InpLossCooldownMin);
 
    return INIT_SUCCEEDED;
 }
@@ -172,16 +179,22 @@ void OnTick()
    int ny_open_min        = NY_OPEN_HOUR * 60 + NY_OPEN_MIN;
    int ny_close_min       = NY_CLOSE_HOUR * 60 + NY_CLOSE_MIN;
 
-   bool in_ny_session = (current_min_of_day >= ny_open_min && current_min_of_day < ny_close_min);
+   // Opening Bell Buffer: skip first InpOpeningBufferMin minutes (e.g. 16:30 - 16:45)
+   int active_open_min    = ny_open_min + InpOpeningBufferMin;
+   bool in_ny_session     = (current_min_of_day >= active_open_min && current_min_of_day < ny_close_min);
+   bool in_opening_buffer = (current_min_of_day >= ny_open_min && current_min_of_day < active_open_min);
+
+   // Loss Cooldown: wait InpLossCooldownMin minutes after any SL
+   bool in_loss_cooldown  = (TimeCurrent() < g_last_loss_time + InpLossCooldownMin * 60);
 
    // 6. Signal Evaluation
-   if(in_ny_session && g_london_qualified && !g_trade.is_open)
+   if(in_ny_session && g_london_qualified && !g_trade.is_open && !in_loss_cooldown)
    {
       EvaluateGoldH17Signal();
    }
 
    // 7. Update on-chart status dashboard
-   string state_str = in_ny_session ? (g_london_qualified ? "ACTIVE (MONITORING SWEEPS)" : "SKIPPED (RANGE < 55pts)") : "OUTSIDE NY SESSION";
+   string state_str = in_ny_session ? (in_loss_cooldown ? "LOSS COOLDOWN ACTIVE" : (g_london_qualified ? "ACTIVE (MONITORING SWEEPS)" : "SKIPPED (RANGE < 55pts)")) : (in_opening_buffer ? "OPENING BELL BUFFER (15m)" : "OUTSIDE NY SESSION");
    if(g_trade.is_open)
    {
       state_str = StringFormat("IN TRADE #%d (%s) | PnL: %s",
@@ -260,6 +273,9 @@ void EvaluateGoldH17Signal()
    {
       double entry = r.close;
       double sl    = r.high + 0.10 * current_atr;
+      if(sl - entry < InpMinSLPoints)
+         sl = entry + InpMinSLPoints;
+
       double tp    = g_london_mid;
       double risk  = sl - entry;
 
@@ -279,6 +295,9 @@ void EvaluateGoldH17Signal()
    {
       double entry = r.close;
       double sl    = r.low - 0.10 * current_atr;
+      if(entry - sl < InpMinSLPoints)
+         sl = entry - InpMinSLPoints;
+
       double tp    = g_london_mid;
       double risk  = entry - sl;
 
@@ -416,11 +435,16 @@ void CheckVirtualTradeExit(const MqlTick &tick)
       
       g_virtual_balance += total_pnl;
       g_trade.is_open = false;
+
+      if(reason == "SL")
+      {
+         g_last_loss_time = TimeCurrent();
+      }
       
       ObjectDelete(0, "AURUM_GOLD_SL");
       ObjectDelete(0, "AURUM_GOLD_TP");
       
-      string close_msg = StringFormat("[AURUM GOLD H17 v1.1] CLOSED #%d by %s | Net PnL: $%.2f (%+.2fR) | Balance: $%.2f",
+      string close_msg = StringFormat("[AURUM GOLD H17 v1.2] CLOSED #%d by %s | Net PnL: $%.2f (%+.2fR) | Balance: $%.2f",
                                       g_trade.ticket, reason, total_pnl, r_mult, g_virtual_balance);
       Print(close_msg);
       Alert(close_msg);

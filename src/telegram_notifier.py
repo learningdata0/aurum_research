@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import time
 from typing import Any, Dict, Optional
 import urllib.parse
 import urllib.request
@@ -35,7 +36,9 @@ class TelegramNotifier:
                 pass
 
     def is_configured(self) -> bool:
-        return bool(self.bot_token and self.chat_id and "YOUR_" not in self.bot_token)
+        if not self.bot_token or not self.chat_id or "YOUR_" in str(self.bot_token) or self.chat_id == "None":
+            self._load_config()
+        return bool(self.bot_token and self.chat_id and "YOUR_" not in str(self.bot_token) and self.chat_id != "None")
 
     def send_message(self, text: str) -> bool:
         """Sends a markdown-formatted message to the configured Telegram chat."""
@@ -108,11 +111,56 @@ class TelegramNotifier:
         msg = f"⏱️ *[AURUM DESK SESSION UPDATE]*\n*{session_title}*\n\n{summary_text}"
         return self.send_message(msg)
 
+    @classmethod
+    def fetch_updates(cls, bot_token: str) -> list:
+        url = f"https://api.telegram.org/bot{bot_token}/getUpdates"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "AurumDesk/1.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                return data.get("result", [])
+        except Exception as e:
+            print(f"[TELEGRAM ERROR] getUpdates failed: {e}")
+            return []
+
+    @classmethod
+    def discover_and_save(cls, bot_token: str, timeout_sec: int = 60) -> Optional[str]:
+        print(f"[AURUM TELEGRAM] Polling for /start message on token {bot_token[:10]}... (Timeout {timeout_sec}s)")
+        print("[AURUM TELEGRAM] Please open the bot in Telegram and press START or send any message.")
+        deadline = time.time() + timeout_sec
+        while time.time() < deadline:
+            updates = cls.fetch_updates(bot_token)
+            if updates:
+                last_update = updates[-1]
+                chat = last_update.get("message", {}).get("chat", {}) or last_update.get("my_chat_member", {}).get("chat", {})
+                chat_id = str(chat.get("id"))
+                user_first = chat.get("first_name", "Trader")
+                if chat_id:
+                    print(f"✅ [AURUM TELEGRAM] Detected Chat ID: {chat_id} (User: {user_first})")
+                    cfg_dir = Path("config")
+                    cfg_dir.mkdir(exist_ok=True)
+                    with open(cfg_dir / "telegram.json", "w", encoding="utf-8") as f:
+                        json.dump({"bot_token": bot_token, "chat_id": chat_id}, f, indent=2)
+                    notifier = cls()
+                    notifier.send_message(
+                        f"🚀 *[AURUM QUANT DESK CONNECTED]*\n\n"
+                        f"أهلاً بك يا {user_first}! تم ربط نظام أوروم للتداول الكمي بنجاح.\n"
+                        f"ستصلك هنا إشعارات فورية بكل الصفقات المفتوحة والمغلقة، ونسب الأرباح، وتحديثات الجلسات لحظة بلحظة.\n\n"
+                        f"• *Symbol Focus:* `US100 (UT100Roll)` & `XAUUSD`\n"
+                        f"• *Execution Mode:* `v1.1 Shadow Engine (Virtual Risk=0)`\n"
+                        f"• *Status:* `ONLINE & ACTIVE`"
+                    )
+                    return chat_id
+            time.sleep(2)
+        print("❌ [AURUM TELEGRAM] Timeout reached without receiving any message.")
+        return None
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="AURUM Telegram Notifier")
     parser.add_argument("--test", action="store_true", help="Send test message")
     parser.add_argument("--setup", nargs=2, metavar=("BOT_TOKEN", "CHAT_ID"), help="Configure credentials")
+    parser.add_argument("--discover", type=str, metavar="BOT_TOKEN", help="Poll and auto-discover chat ID from incoming message")
     args = parser.parse_args()
 
     notifier = TelegramNotifier()
@@ -126,9 +174,17 @@ if __name__ == "__main__":
         print(f"[SETUP] Telegram configuration saved to config/telegram.json")
         notifier = TelegramNotifier()
 
+    if args.discover:
+        found_id = TelegramNotifier.discover_and_save(args.discover, timeout_sec=90)
+        if found_id:
+            print(f"[DISCOVER SUCCESS] Saved chat_id: {found_id}")
+        else:
+            print("[DISCOVER FAILED] No message received.")
+
     if args.test:
         if notifier.is_configured():
             ok = notifier.send_message("🚀 *[AURUM TEST]* Telegram Alert Bot connected and operational!")
             print(f"[TEST] Alert sent result: {ok}")
         else:
-            print("[TEST] Notifier is not configured yet. Run with --setup <BOT_TOKEN> <CHAT_ID>")
+            print("[TEST] Notifier is not configured yet. Run with --setup <BOT_TOKEN> <CHAT_ID> or --discover <BOT_TOKEN>")
+

@@ -495,7 +495,10 @@ class ShadowTradingDaemon:
             if not content:
                 return
             for line in content.splitlines():
-                parts = [p.strip() for p in line.split(",") if p.strip()]
+                if "\t" in line:
+                    parts = [p.strip() for p in line.split("\t") if p.strip()]
+                else:
+                    parts = [p.strip() for p in line.split(",") if p.strip()]
                 if len(parts) >= 10:
                     t_str, sym, dir_str, trig_lvl, e_entry, e_sl, tp1, tp2, tp3, tp4 = parts[:10]
                     key = f"{t_str}_{sym}_{dir_str}"

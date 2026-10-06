@@ -25,14 +25,14 @@ input double InpSweepBufferATR    = 0.05;     // Min penetration beyond London l
 input int    InpMaxHoldBars       = 120;      // Max hold duration in M1 bars
 
 input group "=== Dynamic Risk & Trade Management ==="
-input bool   InpEnableHybridTP1   = true;     // Enable 50% TP1 partial close
-input double InpTP1Points         = 15.0;     // TP1 trigger distance in points
-input bool   InpEnableBreakeven   = true;     // Move SL to Breakeven after TP1
-input bool   InpEnableTrailing    = true;     // Enable multi-stage trailing stop
-input double InpTrailStep1Pts     = 25.0;     // Points in profit to trigger Trail Step 1
-input double InpTrailLock1Pts     = 10.0;     // Profit points locked at Trail Step 1
-input double InpTrailStep2Pts     = 40.0;     // Points in profit to trigger Trail Step 2
-input double InpTrailLock2Pts     = 25.0;     // Profit points locked at Trail Step 2
+input bool   InpEnableHybridTP1   = false;    // Enable 50% TP1 partial close (False = Pure Swing to Midpoint)
+input double InpTP1Points         = 45.0;     // TP1 trigger distance in points (requires solid +2.5R expansion)
+input bool   InpEnableBreakeven   = false;    // Move SL to Breakeven after TP1 (False = Give trade breathing room)
+input bool   InpEnableTrailing    = false;    // Enable trailing stop (False = Full Midpoint Target)
+input double InpTrailStep1Pts     = 50.0;     // Points in profit to trigger Trail Step 1
+input double InpTrailLock1Pts     = 25.0;     // Profit points locked at Trail Step 1
+input double InpTrailStep2Pts     = 80.0;     // Points in profit to trigger Trail Step 2
+input double InpTrailLock2Pts     = 50.0;     // Profit points locked at Trail Step 2
 
 //--- Pre-Entry Institutional Safeguards (v1.2)
 input int    InpOpeningBufferMin  = 15;       // Opening bell buffer in minutes (16:30 - 16:45)
@@ -257,9 +257,10 @@ void CalculateLondonLevels(datetime day)
 //+------------------------------------------------------------------+
 void EvaluateH17Signal()
 {
+   const int LOOKBACK = 5;
    MqlRates rates[];
    ArraySetAsSeries(rates, true);
-   if(CopyRates(_Symbol, PERIOD_M1, 1, 2, rates) < 2)
+   if(CopyRates(_Symbol, PERIOD_M1, 1, LOOKBACK + 1, rates) < LOOKBACK + 1)
       return;
 
    double atr[];
@@ -277,15 +278,24 @@ void EvaluateH17Signal()
    double upper_wick = r.high - MathMax(r.open, r.close);
    double lower_wick = MathMin(r.open, r.close) - r.low;
 
+   // Look back across last 5 bars for sweep extreme
+   double highest_h = rates[0].high;
+   double lowest_l  = rates[0].low;
+   for(int k = 1; k < LOOKBACK; k++)
+   {
+      if(rates[k].high > highest_h) highest_h = rates[k].high;
+      if(rates[k].low  < lowest_l)  lowest_l  = rates[k].low;
+   }
+
    // 1. Bearish Sweep of London High
-   bool swept_h = (r.high >= g_london_high + sweep_buffer);
+   bool swept_h = (highest_h >= g_london_high + sweep_buffer);
    bool reclaimed_h = (r.close < g_london_high && r.close > g_london_low);
    bool bearish_confirm = (r.close < r.open || (upper_wick >= 0.25 * c_range));
 
    if(swept_h && reclaimed_h && bearish_confirm)
    {
       double entry = r.close;
-      double sl    = r.high + 0.10 * current_atr;
+      double sl    = highest_h + 0.10 * current_atr;
       if(sl - entry < InpMinSLPoints)
          sl = entry + InpMinSLPoints;
 
@@ -300,14 +310,14 @@ void EvaluateH17Signal()
    }
 
    // 2. Bullish Sweep of London Low
-   bool swept_l = (r.low <= g_london_low - sweep_buffer);
+   bool swept_l = (lowest_l <= g_london_low - sweep_buffer);
    bool reclaimed_l = (r.close > g_london_low && r.close < g_london_high);
    bool bullish_confirm = (r.close > r.open || (lower_wick >= 0.25 * c_range));
 
    if(swept_l && reclaimed_l && bullish_confirm)
    {
       double entry = r.close;
-      double sl    = r.low - 0.10 * current_atr;
+      double sl    = lowest_l - 0.10 * current_atr;
       if(entry - sl < InpMinSLPoints)
          sl = entry - InpMinSLPoints;
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import sys
 import time
@@ -14,6 +15,27 @@ from .data import prepare_data
 from .htf_levels import build_htf_context_map, DailyHTFContext
 from .hypotheses_v08 import HypothesisV08, evaluate_v08_signal
 from .telegram_notifier import TelegramNotifier
+
+
+def get_default_mt5_files_dir() -> Path:
+    """Resolves MT5 MQL5/Files directory dynamically across macOS and Linux/Docker VPS."""
+    env_dir = os.environ.get("MT5_FILES_DIR")
+    if env_dir:
+        p = Path(env_dir)
+        if p.exists():
+            return p
+
+    candidates = [
+        Path("/root/.wine/drive_c/Program Files/MetaTrader 5/MQL5/Files"),
+        Path.home() / ".wine/drive_c/Program Files/MetaTrader 5/MQL5/Files",
+        Path.home() / "Library/Application Support/net.metaquotes.wine.metatrader5/drive_c/Program Files/MetaTrader 5/MQL5/Files",
+        Path("/Users/nouh/Library/Application Support/net.metaquotes.wine.metatrader5/drive_c/Program Files/MetaTrader 5/MQL5/Files"),
+    ]
+    for c in candidates:
+        if c.exists():
+            return c
+    return candidates[0] if sys.platform.startswith("linux") else candidates[2]
+
 
 
 class ShadowTradingDaemon:
@@ -327,9 +349,10 @@ class ShadowTradingDaemon:
         Supports passing either the MQL5/Files folder or a specific CSV file.
         """
         if path_or_dir is None:
-            path_or_dir = "/Users/nouh/Library/Application Support/net.metaquotes.wine.metatrader5/drive_c/Program Files/MetaTrader 5/MQL5/Files"
+            p = get_default_mt5_files_dir()
+        else:
+            p = Path(path_or_dir)
 
-        p = Path(path_or_dir)
         df_us100 = None
         df_gold = None
 
@@ -524,9 +547,9 @@ class ShadowTradingDaemon:
             pass
 
     def run_watch(self, poll_interval: int = 1):
-        print(f"[AURUM WATCH] Monitoring Dual-Asset MT5 Shadow Execution every {poll_interval}s...")
-        base_dir = "/Users/nouh/Library/Application Support/net.metaquotes.wine.metatrader5/drive_c/Program Files/MetaTrader 5/MQL5/Files"
-        p_base = Path(base_dir)
+        p_base = get_default_mt5_files_dir()
+        base_dir = str(p_base)
+        print(f"[AURUM WATCH] Monitoring Dual-Asset MT5 Shadow Execution in {base_dir} every {poll_interval}s...")
         last_mtimes = {}
 
         while True:

@@ -1,5 +1,5 @@
 # AURUM v0.8 Dual-Asset Forward Shadow Execution Dashboard
-**Updated:** 2026-10-07 05:10:03 UTC  
+**Updated:** 2026-10-07 14:06:08 UTC  
 **Mode:** Virtual Forward Paper Trading (Zero Real Financial Risk)  
 **Active Portfolio:** US100 (`H17` Range $\ge 140$ pts) + XAUUSD (`XAU_H17` Range $\ge 25$ pts)  
 **Status:** Dual Autonomous Execution Active
@@ -15,8 +15,15 @@
 ---
 
 ### Asset Breakdown
-- **US100 (Nasdaq-100):** 24 trades | Win Rate: 20.8% | Net: $+111.07 (+4.45R) | PF: 1.63
+- **US100 (Nasdaq-100):** 12 trades | Win Rate: 41.7% | Net: $+111.07 (+4.45R) | PF: 1.63
 - **XAUUSD (Gold):** 0 trades (Standing by)
+
+---
+
+### 🟢 Active Open Forward Positions
+| Asset | Ticket | Open Time | Direction | Entry | SL | TP | Risk ($) | Target |
+|---|---|---|---|---|---|---|---|---|
+| US100 | #1000 | 2026.10.07 16:55 | **BUY** | 30968.14 | 30924.13 | 31096.47 | $25.00 | London Midpoint |
 
 ---
 

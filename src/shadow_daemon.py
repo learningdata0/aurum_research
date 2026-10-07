@@ -377,34 +377,55 @@ class ShadowTradingDaemon:
             df_gold["asset"] = "XAUUSD"
             all_trades.append(df_gold)
 
-        portfolio_df = pd.concat(all_trades, ignore_index=True)
-        portfolio_df["pnl"] = pd.to_numeric(portfolio_df["pnl"], errors="coerce").fillna(0.0)
-        portfolio_df["r_mult"] = pd.to_numeric(portfolio_df["r_mult"], errors="coerce").fillna(0.0)
+        # Robust chronological open/closed order tracking per asset
+        open_trades_list = []
+        closed_trades_list = []
 
-        closed_trades = portfolio_df[portfolio_df["action"] == "CLOSED"].copy()
-        closed_tickets = set(closed_trades["ticket"].dropna().unique())
-        open_trades = portfolio_df[(portfolio_df["action"] == "OPEN") & (~portfolio_df["ticket"].isin(closed_tickets))].copy()
+        for asset_df in all_trades:
+            asset_open_map = {}
+            for _, row in asset_df.iterrows():
+                act = str(row.get("action", "")).strip().upper()
+                ticket_val = row.get("ticket")
+                if act == "OPEN":
+                    asset_open_map[ticket_val] = row
+                elif act == "CLOSED":
+                    if ticket_val in asset_open_map:
+                        del asset_open_map[ticket_val]
+                    closed_trades_list.append(row)
+            open_trades_list.extend(asset_open_map.values())
+
+        open_trades = pd.DataFrame(open_trades_list) if open_trades_list else pd.DataFrame()
+        closed_trades = pd.DataFrame(closed_trades_list) if closed_trades_list else pd.DataFrame()
+
+        if not closed_trades.empty:
+            closed_trades["pnl"] = pd.to_numeric(closed_trades["pnl"], errors="coerce").fillna(0.0)
+            closed_trades["r_mult"] = pd.to_numeric(closed_trades["r_mult"], errors="coerce").fillna(0.0)
 
         tot_trades = len(closed_trades)
-        wins = len(closed_trades[closed_trades["pnl"] > 0])
-        losses = len(closed_trades[closed_trades["pnl"] < 0])
-        net_cash = float(closed_trades["pnl"].sum())
-        net_r = float(closed_trades["r_mult"].sum())
-        gw = closed_trades[closed_trades["pnl"] > 0]["pnl"].sum()
-        gl = abs(closed_trades[closed_trades["pnl"] < 0]["pnl"].sum())
-        pf = round(gw / gl, 2) if gl > 0 else 999.0
+        wins = len(closed_trades[closed_trades["pnl"] > 0]) if not closed_trades.empty else 0
+        losses = len(closed_trades[closed_trades["pnl"] < 0]) if not closed_trades.empty else 0
+        net_cash = float(closed_trades["pnl"].sum()) if not closed_trades.empty else 0.0
+        net_r = float(closed_trades["r_mult"].sum()) if not closed_trades.empty else 0.0
+        gw = closed_trades[closed_trades["pnl"] > 0]["pnl"].sum() if not closed_trades.empty else 0.0
+        gl = abs(closed_trades[closed_trades["pnl"] < 0]["pnl"].sum()) if not closed_trades.empty else 0.0
+        pf = round(gw / gl, 2) if gl > 0 else (999.0 if gw > 0 else 0.0)
         tot_bal = 10000.0 + net_cash
 
-        # Asset metrics
+        # Asset metrics based purely on closed trades
         def asset_summary(df_a: Optional[pd.DataFrame], name: str):
             if df_a is None or df_a.empty:
                 return f"- **{name}:** 0 trades (Standing by)"
-            w = len(df_a[df_a["pnl"] > 0])
-            n = len(df_a)
-            nc = df_a["pnl"].sum()
-            nr = df_a["r_mult"].sum()
-            g_w = df_a[df_a["pnl"] > 0]["pnl"].sum()
-            g_l = abs(df_a[df_a["pnl"] < 0]["pnl"].sum())
+            closed_a = df_a[df_a["action"] == "CLOSED"].copy()
+            if closed_a.empty:
+                return f"- **{name}:** 0 closed trades (Standing by)"
+            closed_a["pnl"] = pd.to_numeric(closed_a["pnl"], errors="coerce").fillna(0.0)
+            closed_a["r_mult"] = pd.to_numeric(closed_a["r_mult"], errors="coerce").fillna(0.0)
+            w = len(closed_a[closed_a["pnl"] > 0])
+            n = len(closed_a)
+            nc = closed_a["pnl"].sum()
+            nr = closed_a["r_mult"].sum()
+            g_w = closed_a[closed_a["pnl"] > 0]["pnl"].sum()
+            g_l = abs(closed_a[closed_a["pnl"] < 0]["pnl"].sum())
             p_f = round(g_w / g_l, 2) if g_l > 0 else 999.0
             return f"- **{name}:** {n} trades | Win Rate: {round(100.0*w/n, 1)}% | Net: ${nc:+,.2f} ({nr:+.2f}R) | PF: {p_f}"
 
@@ -437,8 +458,9 @@ class ShadowTradingDaemon:
                 risk_cash = 25.0
                 dash += f"| {r.get('asset', 'US100')} | #{r.ticket} | {r.time} | **{r.direction}** | {r.entry} | {r.sl} | {r.tp} | ${risk_cash:.2f} | London Midpoint |\n"
                 t_id = int(r.ticket)
-                if t_id not in self._notified_open_tickets:
-                    self._notified_open_tickets.add(t_id)
+                notif_key = f"{r.get('asset', 'US100')}_{r.ticket}_{r.time}"
+                if notif_key not in self._notified_open_tickets:
+                    self._notified_open_tickets.add(notif_key)
                     asset_name = r.get("asset", "US100")
                     is_gold = "XAU" in str(asset_name).upper()
                     entry_val = float(r.entry)
@@ -482,8 +504,9 @@ class ShadowTradingDaemon:
         for _, r in closed_trades.tail(10).iterrows():
             dash += f"| {r.get('asset', 'US100')} | {r.ticket} | {r.time} | {r.direction} | {r.entry} | {r.sl} | {r.tp} | {r.pnl:+,.2f} | {r.r_mult:+.2f}R | {r.reason} |\n"
             t_id = int(r.ticket)
-            if t_id not in self._notified_closed_tickets:
-                self._notified_closed_tickets.add(t_id)
+            notif_key = f"{r.get('asset', 'US100')}_{r.ticket}_{r.time}"
+            if notif_key not in self._notified_closed_tickets:
+                self._notified_closed_tickets.add(notif_key)
                 self.notifier.send_trade_close_alert(
                     asset=r.get("asset", "US100"),
                     ticket=t_id,

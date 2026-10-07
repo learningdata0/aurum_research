@@ -77,89 +77,100 @@ MT5_DIR = Path("/Users/nouh/Library/Application Support/net.metaquotes.wine.meta
 # Data loading functions
 def load_shadow_trades():
     trades = []
-    # 1. Primary source: MT5 log files if accessible
-    for fname, asset in [("aurum_shadow_trades.csv", "US100"), ("aurum_gold_shadow_trades.csv", "XAUUSD")]:
-        fp = MT5_DIR / fname
-        if fp.exists():
-            try:
-                with open(fp, "rb") as f:
-                    raw = f.read()
-                text = raw.decode("utf-16le", errors="ignore") if raw.startswith(b"\xff\xfe") else raw.decode("utf-8", errors="ignore")
-                for line in text.strip().split("\n"):
-                    parts = [p.strip() for p in line.split("\t") if p.strip()]
-                    if len(parts) >= 8:
-                        status = parts[2].upper()
-                        if status == "CLOSED":
-                            ticket = int(parts[0])
-                            close_time = parts[1]
-                            sym = parts[3]
-                            direction = parts[4]
-                            entry = float(parts[5])
-                            sl = float(parts[6])
-                            tp = float(parts[7])
-                            pnl = float(parts[8]) if len(parts) > 8 else 0.0
-                            r_mult = float(parts[9]) if len(parts) > 9 else (pnl / 25.0)
-                            reason = parts[10] if len(parts) > 10 else ("TP" if pnl > 0 else "SL")
-                            balance = float(parts[11]) if len(parts) > 11 else 10000.0 + pnl
-                            trades.append({
-                                "ticket": ticket,
-                                "time": close_time,
-                                "asset": asset,
-                                "direction": direction,
-                                "entry": entry,
-                                "sl": sl,
-                                "tp": tp,
-                                "pnl": pnl,
-                                "r": r_mult,
-                                "reason": reason,
-                                "balance": balance,
-                                "status": "CLOSED"
-                            })
-            except Exception:
-                pass
-    
-    # Fallback to hardcoded / parsed from dashboard if MT5 path is unreadable
+    # Check candidates: MT5 files directory first, then repository reports/ directory
+    for base_p in [MT5_DIR, REPORTS_DIR]:
+        if not base_p.exists():
+            continue
+        for fname, asset in [
+            ("aurum_shadow_trades.csv", "US100"),
+            ("shadow_trades_US100.csv", "US100"),
+            ("aurum_gold_shadow_trades.csv", "XAUUSD"),
+            ("shadow_trades_XAUUSD.csv", "XAUUSD")
+        ]:
+            fp = base_p / fname
+            if fp.exists():
+                try:
+                    with open(fp, "rb") as f:
+                        raw = f.read()
+                    text = raw.decode("utf-16le", errors="ignore") if raw.startswith(b"\xff\xfe") else raw.decode("utf-8", errors="ignore")
+                    for line in text.strip().split("\n"):
+                        parts = [p.strip() for p in (line.split("\t") if "\t" in line else line.split(",")) if p.strip()]
+                        if len(parts) >= 8:
+                            status = parts[2].upper()
+                            if status == "CLOSED":
+                                ticket = int(parts[0])
+                                close_time = parts[1]
+                                direction = parts[4]
+                                entry = float(parts[5])
+                                sl = float(parts[6])
+                                tp = float(parts[7])
+                                pnl = float(parts[8]) if len(parts) > 8 else 0.0
+                                r_mult = float(parts[9]) if len(parts) > 9 else (pnl / 25.0)
+                                reason = parts[10] if len(parts) > 10 else ("TP" if pnl > 0 else "SL")
+                                balance = float(parts[11]) if len(parts) > 11 else 10000.0 + pnl
+                                trades.append({
+                                    "ticket": ticket,
+                                    "time": close_time,
+                                    "asset": asset,
+                                    "direction": direction,
+                                    "entry": entry,
+                                    "sl": sl,
+                                    "tp": tp,
+                                    "pnl": pnl,
+                                    "r": r_mult,
+                                    "reason": reason,
+                                    "balance": balance,
+                                    "status": "CLOSED"
+                                })
+                except Exception:
+                    pass
+        if trades:
+            break
+
+    # Fallback to parsing shadow_dashboard.md markdown table
     if not trades:
         dash_fp = REPORTS_DIR / "shadow_dashboard.md"
         if dash_fp.exists():
             try:
                 with open(dash_fp, "r", encoding="utf-8") as f:
-                    content = f.read()
-                # Parse known executions
-                if "1000" in content and "30250.3" in content:
-                    trades.append({
-                        "ticket": 1000,
-                        "time": "2026.09.29 21:23",
-                        "asset": "US100",
-                        "direction": "BUY",
-                        "entry": 30250.30,
-                        "sl": 30238.26,
-                        "tp": 30342.50,
-                        "pnl": 191.50,
-                        "r": 7.66,
-                        "reason": "TP",
-                        "balance": 10191.50,
-                        "status": "CLOSED"
-                    })
-                if "1000" in content and "30484.62" in content:
-                    trades.append({
-                        "ticket": 1001,
-                        "time": "2026.09.30 16:59",
-                        "asset": "US100",
-                        "direction": "SELL",
-                        "entry": 30484.62,
-                        "sl": 30536.44,
-                        "tp": 30371.46,
-                        "pnl": -25.00,
-                        "r": -1.00,
-                        "reason": "SL",
-                        "balance": 10166.50,
-                        "status": "CLOSED"
-                    })
+                    in_table = False
+                    for line in f:
+                        if "### Closed Forward Executions" in line:
+                            in_table = True
+                            continue
+                        if in_table and line.startswith("|"):
+                            parts = [p.strip() for p in line.split("|")[1:-1]]
+                            if len(parts) >= 10 and parts[0] in ["US100", "XAUUSD", "US30"]:
+                                asset, ticket, t_str, direction, entry, sl, tp, pnl_s, r_s, reason = parts[:10]
+                                try:
+                                    pnl = float(pnl_s.replace("$", "").replace("+", "").replace(",", ""))
+                                    r_val = float(r_s.replace("R", "").replace("+", ""))
+                                    trades.append({
+                                        "ticket": int(ticket),
+                                        "time": t_str,
+                                        "asset": asset,
+                                        "direction": direction,
+                                        "entry": float(entry),
+                                        "sl": float(sl),
+                                        "tp": float(tp),
+                                        "pnl": pnl,
+                                        "r": r_val,
+                                        "reason": reason,
+                                        "balance": 10000.0,
+                                        "status": "CLOSED"
+                                    })
+                                except Exception:
+                                    pass
             except Exception:
                 pass
 
-    return pd.DataFrame(trades)
+    df = pd.DataFrame(trades)
+    if not df.empty:
+        df = df.drop_duplicates(subset=["ticket", "time", "asset"]).sort_values("time").reset_index(drop=True)
+        # Reconstruct running balance accurately from $10,000 baseline
+        cum_pnl = df["pnl"].cumsum()
+        df["balance"] = 10000.0 + cum_pnl
+    return df
 
 def load_market_memory():
     p = REPORTS_DIR / "market_memory.json"

@@ -172,6 +172,49 @@ def load_shadow_trades():
         df["balance"] = 10000.0 + cum_pnl
     return df
 
+def load_open_trades():
+    open_trades = []
+    dash_fp = REPORTS_DIR / "shadow_dashboard.md"
+    if dash_fp.exists():
+        try:
+            with open(dash_fp, "r", encoding="utf-8") as f:
+                in_open = False
+                for line in f:
+                    if "### 🟢 Active Open Forward Positions" in line:
+                        in_open = True
+                        continue
+                    if in_open and line.startswith("---"):
+                        break
+                    if in_open and line.startswith("|"):
+                        parts = [p.strip() for p in line.split("|")[1:-1]]
+                        if len(parts) >= 8 and parts[0] in ["US100", "XAUUSD"]:
+                            asset = parts[0]
+                            ticket = parts[1].replace("#", "")
+                            t_str = parts[2]
+                            direction = parts[3].replace("**", "")
+                            try:
+                                entry = float(parts[4])
+                                sl = float(parts[5])
+                                tp = float(parts[6])
+                                risk_str = parts[7]
+                                target = parts[8] if len(parts) > 8 else "London Midpoint"
+                                open_trades.append({
+                                    "Ticket #": ticket,
+                                    "Asset": asset,
+                                    "Direction": direction,
+                                    "Open Time": t_str,
+                                    "Entry Price": entry,
+                                    "Stop Loss": sl,
+                                    "Take Profit": tp,
+                                    "Risk ($)": risk_str,
+                                    "Target Objective": target
+                                })
+                            except Exception:
+                                pass
+        except Exception:
+            pass
+    return pd.DataFrame(open_trades)
+
 def load_market_memory():
     p = REPORTS_DIR / "market_memory.json"
     if p.exists():
@@ -194,6 +237,7 @@ def load_temporal_profile():
 
 # Load Data
 df_trades = load_shadow_trades()
+df_open = load_open_trades()
 memory_data = load_market_memory()
 temporal_data = load_temporal_profile()
 
@@ -351,6 +395,13 @@ with tab2:
     st.subheader("📋 Dual-Asset Forward Shadow Execution Ledger (Gate 2)")
     st.markdown("All executions are generated in real-time by `AurumH17ShadowEA` (US100) and `AurumGoldH17ShadowEA` (XAUUSD) on live MetaTrader 5 charts with zero financial capital risk.")
     
+    if not df_open.empty:
+        st.markdown("### 🟢 Active Open Forward Positions (صفقات مفتوحة حالياً)")
+        for _, r in df_open.iterrows():
+            st.success(f"🎯 **{r['Asset']} {r['Direction']} (Ticket #{r['Ticket #']})** | Open Time: `{r['Open Time']}` | Entry: `{r['Entry Price']:,.2f}` | SL: `{r['Stop Loss']:,.2f}` | TP: `{r['Take Profit']:,.2f}` | Target: **{r['Target Objective']}** | Risk: `{r['Risk ($)']}`")
+        st.dataframe(df_open, use_container_width=True)
+        st.markdown("---")
+
     if not df_trades.empty:
         display_df = df_trades.copy()
         def style_pnl(val):

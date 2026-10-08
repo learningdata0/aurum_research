@@ -25,14 +25,14 @@ input double InpSweepBufferATR    = 0.05;     // Min penetration beyond London l
 input int    InpMaxHoldBars       = 120;      // Max hold duration in M1 bars
 
 input group "=== Dynamic Risk & Trade Management ==="
-input bool   InpEnableHybridTP1   = false;    // Enable 50% TP1 partial close (False = Pure Swing to Midpoint)
-input double InpTP1Points         = 12.0;     // TP1 trigger distance in points ($12/oz = solid +2.5R expansion)
-input bool   InpEnableBreakeven   = false;    // Move SL to Breakeven after TP1 (False = Give trade breathing room)
-input bool   InpEnableTrailing    = false;    // Enable multi-stage trailing stop (False = Full Midpoint Target)
-input double InpTrailStep1Pts     = 15.0;     // Points in profit to trigger Trail Step 1
-input double InpTrailLock1Pts     = 8.0;      // Profit points locked at Trail Step 1
-input double InpTrailStep2Pts     = 25.0;     // Points in profit to trigger Trail Step 2
-input double InpTrailLock2Pts     = 15.0;     // Profit points locked at Trail Step 2
+input bool   InpEnableHybridTP1   = true;     // Enable 50% TP1 partial close (Bank profit automatically!)
+input double InpTP1Points         = 5.0;      // TP1 trigger distance in points ($5/oz = solid +1.2R banked)
+input bool   InpEnableBreakeven   = true;     // Move SL to Breakeven after TP1 (Zero Risk Runner!)
+input bool   InpEnableTrailing    = true;     // Enable multi-stage trailing stop
+input double InpTrailStep1Pts     = 8.0;      // Points in profit to trigger Trail Step 1 ($8/oz)
+input double InpTrailLock1Pts     = 3.5;      // Profit points locked at Trail Step 1 ($3.5/oz)
+input double InpTrailStep2Pts     = 14.0;     // Points in profit to trigger Trail Step 2 ($14/oz)
+input double InpTrailLock2Pts     = 7.0;      // Profit points locked at Trail Step 2 ($7/oz)
 
 //--- Pre-Entry Institutional Safeguards (v1.2)
 input int    InpOpeningBufferMin  = 15;       // Opening bell buffer in minutes (16:30 - 16:45)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -15,13 +16,17 @@ class TelegramNotifier:
     Lightweight, institutional Telegram Notification Engine for AURUM.
     Dispatches instant alerts for trade executions, stop-loss / take-profit hits,
     session milestones, and portfolio equity updates directly to mobile devices.
+    Includes persistent deduplication and rate-limiting to prevent repeat alerts.
     """
 
-    def __init__(self, config_path: str = "config/telegram.json"):
+    def __init__(self, config_path: str = "config/telegram.json", dedup_cache_path: str = "reports/.telegram_dedup_cache.json"):
         self.config_file = Path(config_path)
+        self.dedup_cache_file = Path(dedup_cache_path)
         self.bot_token: Optional[str] = os.environ.get("AURUM_TELEGRAM_BOT_TOKEN")
         self.chat_id: Optional[str] = os.environ.get("AURUM_TELEGRAM_CHAT_ID")
+        self._dedup_cache: Dict[str, float] = {}
         self._load_config()
+        self._load_dedup_cache()
 
     def _load_config(self):
         if self.config_file.exists():
@@ -35,15 +40,50 @@ class TelegramNotifier:
             except Exception:
                 pass
 
+    def _load_dedup_cache(self):
+        if self.dedup_cache_file.exists():
+            try:
+                with open(self.dedup_cache_file, "r", encoding="utf-8") as f:
+                    self._dedup_cache = json.load(f)
+            except Exception:
+                self._dedup_cache = {}
+
+    def _save_dedup_cache(self):
+        try:
+            self.dedup_cache_file.parent.mkdir(parents=True, exist_ok=True)
+            # Prune cache entries older than 24 hours
+            now = time.time()
+            clean_cache = {k: v for k, v in self._dedup_cache.items() if (now - v) < 86400}
+            with open(self.dedup_cache_file, "w", encoding="utf-8") as f:
+                json.dump(clean_cache, f, indent=2)
+            self._dedup_cache = clean_cache
+        except Exception:
+            pass
+
     def is_configured(self) -> bool:
         if not self.bot_token or not self.chat_id or "YOUR_" in str(self.bot_token) or self.chat_id == "None":
             self._load_config()
         return bool(self.bot_token and self.chat_id and "YOUR_" not in str(self.bot_token) and self.chat_id != "None")
 
-    def send_message(self, text: str) -> bool:
-        """Sends a markdown-formatted message to the configured Telegram chat."""
+    def send_message(self, text: str, dedup_key: Optional[str] = None, cooldown_seconds: int = 1800) -> bool:
+        """Sends a markdown-formatted message to the configured Telegram chat with deduplication."""
         if not self.is_configured():
             print(f"[TELEGRAM STANDBY] Not configured yet. Alert queued:\n{text}")
+            return False
+
+        now = time.time()
+        # 1. Check explicit dedup_key cooldown
+        if dedup_key:
+            last_sent = self._dedup_cache.get(dedup_key, 0.0)
+            if (now - last_sent) < cooldown_seconds:
+                print(f"[TELEGRAM DEDUP] Suppressed duplicate alert: {dedup_key} (cooldown {cooldown_seconds}s)")
+                return False
+
+        # 2. Check content hash cooldown (prevent identical text sent repeatedly)
+        content_hash = "hash_" + hashlib.sha256(text.strip().encode("utf-8")).hexdigest()[:16]
+        last_sent_hash = self._dedup_cache.get(content_hash, 0.0)
+        if (now - last_sent_hash) < cooldown_seconds:
+            print(f"[TELEGRAM DEDUP] Suppressed duplicate message text (cooldown {cooldown_seconds}s)")
             return False
 
         url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
@@ -63,7 +103,13 @@ class TelegramNotifier:
             )
             with urllib.request.urlopen(req, timeout=10) as resp:
                 result = json.loads(resp.read().decode("utf-8"))
-                return result.get("ok", False)
+                ok = result.get("ok", False)
+                if ok:
+                    if dedup_key:
+                        self._dedup_cache[dedup_key] = now
+                    self._dedup_cache[content_hash] = now
+                    self._save_dedup_cache()
+                return ok
         except Exception as e:
             print(f"[TELEGRAM ERROR] Failed to send alert: {e}")
             return False
@@ -82,7 +128,9 @@ class TelegramNotifier:
         tp3: float = 0.0,
         tp4: float = 0.0,
         risk_pct: float = 0.25,
-        risk_cash: float = 25.0
+        risk_cash: float = 25.0,
+        dedup_key: Optional[str] = None,
+        cooldown_seconds: int = 2700
     ):
         is_gold = "XAU" in asset.upper()
         mult = 10.0 if is_gold else 1.0
@@ -115,7 +163,8 @@ class TelegramNotifier:
             f"• *Risk Allocation:* `{risk_pct:.2f}% (${risk_cash:.2f})`\n\n"
             f"⏳ *Bar confirmation in progress — Awaiting clean execution trigger...*"
         )
-        return self.send_message(msg)
+        key = dedup_key or f"radar_{asset}_{dir_str}"
+        return self.send_message(msg, dedup_key=key, cooldown_seconds=cooldown_seconds)
 
     def send_trade_open_alert(
         self,
@@ -132,7 +181,8 @@ class TelegramNotifier:
         risk_cash: float = 25.0,
         risk_pct: float = 0.25,
         timeframe: str = "PERIOD_M1",
-        mode: str = "Single Entry Multi-TP"
+        mode: str = "Single Entry Multi-TP",
+        dedup_key: Optional[str] = None
     ):
         dir_str = direction.upper()
         header = f"🔴 *SELL OPENED*" if dir_str == "SELL" else f"🟢 *BUY OPENED*"
@@ -165,9 +215,20 @@ class TelegramNotifier:
             f"*TP1 Management:* `Bank 50% Profit + Move SL to Breakeven`\n"
             f"*TP2 Management:* `Dynamic ATR Multi-Stage Trailing Stop`"
         )
-        return self.send_message(msg)
+        key = dedup_key or f"open_{asset}_{ticket}"
+        return self.send_message(msg, dedup_key=key, cooldown_seconds=86400)
 
-    def send_trade_close_alert(self, asset: str, ticket: int, direction: str, pnl: float, r_mult: float, reason: str, balance: float):
+    def send_trade_close_alert(
+        self,
+        asset: str,
+        ticket: int,
+        direction: str,
+        pnl: float,
+        r_mult: float,
+        reason: str,
+        balance: float,
+        dedup_key: Optional[str] = None
+    ):
         if pnl > 0:
             header = f"🎯 *[AURUM TAKE PROFIT HIT — WIN!]*"
             pnl_str = f"+${pnl:,.2f} (+{r_mult:.2f}R)"
@@ -184,7 +245,8 @@ class TelegramNotifier:
             f"• *Updated Portfolio Equity:* `${balance:,.2f}`\n\n"
             f"📈 *Gate 2 Forward Paper Execution Validated.*"
         )
-        return self.send_message(msg)
+        key = dedup_key or f"close_{asset}_{ticket}_{reason}"
+        return self.send_message(msg, dedup_key=key, cooldown_seconds=86400)
 
     def send_session_summary(self, session_title: str, summary_text: str):
         msg = f"⏱️ *[AURUM DESK SESSION UPDATE]*\n*{session_title}*\n\n{summary_text}"

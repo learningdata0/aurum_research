@@ -569,6 +569,50 @@ class ShadowTradingDaemon:
         except Exception:
             pass
 
+    def check_market_session_and_news(self):
+        """Broadcasts institutional market session transitions and high-impact macro news to Telegram."""
+        now_utc = datetime.now(timezone.utc)
+        hour = now_utc.hour
+        minute = now_utc.minute
+        day_str = now_utc.strftime("%Y-%m-%d")
+
+        # 1. Session Open / Close Milestones
+        milestones = [
+            (7, 0, "london_open", "🇬🇧 <b>LONDON SESSION OPEN (07:00 UTC / 08:00 BST)</b>", 
+             "• <b>Primary Focus:</b> London Range Definition (Liquidity Pools building)\n• <b>US100 Threshold:</b> $\ge 140$ pts\n• <b>Gold Threshold:</b> $\ge 25$ pts\n• <b>Action:</b> Building session High/Low boundaries."),
+            (13, 30, "ny_open", "🇺🇸 <b>NEW YORK CASH SESSION OPEN (13:30 UTC / 09:30 EST)</b>", 
+             "• <b>Primary Focus:</b> London High/Low Liquidity Sweeps\n• <b>Strategy:</b> H17 Sweep & Reclaim\n• <b>Risk Model:</b> Staged TP1 (+25 pts / +$5.00) + Instant BE + Multi-Stage ATR Trailing\n• <b>Status:</b> 🎯 Radar Armed & Hunting."),
+            (16, 30, "london_close", "🇬🇧 <b>LONDON SESSION CLOSE (16:30 UTC)</b>", 
+             "• <b>Primary Focus:</b> London Midpoint Mean Reversion complete\n• <b>Action:</b> Managing remaining swing runners."),
+            (21, 0, "ny_close", "🇺🇸 <b>NEW YORK SESSION CLOSE & DAILY RETROSPECTIVE (21:00 UTC)</b>", 
+             "• <b>Daily Wrap:</b> Updating Gate 2 ledger and pushing cloud reports.\n• <b>US30 Status:</b> Quarantined (30-day pause active).")
+        ]
+
+        for h, m, m_key, title, body in milestones:
+            if hour == h and minute == m:
+                dedup_k = f"session_{m_key}_{day_str}"
+                self.notifier.send_message(f"⏱️ {title}\n\n{body}", dedup_key=dedup_k, cooldown_seconds=86400)
+
+        # 2. Economic News Alerts (Check every 5 mins)
+        if minute % 5 == 0:
+            try:
+                from .news_filter import NewsFilter
+                nf = NewsFilter()
+                active_events = nf.get_upcoming_events(lookahead_minutes=30)
+                for ev in active_events:
+                    ev_key = f"news_{ev['name']}_{ev['time']}"
+                    self.notifier.send_message(
+                        f"⚠️ <b>MACRO ECONOMIC EVENT ALERT (RED FOLDER)</b>\n\n"
+                        f"• <b>Event:</b> {ev['name']}\n"
+                        f"• <b>Scheduled Time:</b> {ev['time']} UTC\n"
+                        f"• <b>Impact:</b> Tier-1 High Volatility\n"
+                        f"• <b>Action:</b> Algorithmic blackout active (entries paused 15m before & after).",
+                        dedup_key=ev_key,
+                        cooldown_seconds=7200
+                    )
+            except Exception:
+                pass
+
     def run_watch(self, poll_interval: int = 1):
         p_base = get_default_mt5_files_dir()
         base_dir = str(p_base)
@@ -580,7 +624,10 @@ class ShadowTradingDaemon:
                 # 1. Sync Radar Alerts immediately
                 self.sync_radar(base_dir)
 
-                # 2. Check Execution files
+                # 2. Market Clock & Macro News Broadcaster
+                self.check_market_session_and_news()
+
+                # 3. Check Execution files
                 changed = False
                 for fname in ["aurum_shadow_trades.csv", "aurum_gold_shadow_trades.csv"]:
                     fp = p_base / fname

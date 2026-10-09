@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone, timedelta
 import hashlib
 import json
 import os
@@ -114,6 +115,14 @@ class TelegramNotifier:
             print(f"[TELEGRAM ERROR] Failed to send alert: {e}")
             return False
 
+    @staticmethod
+    def format_timestamp() -> str:
+        """Returns ISO accurate timestamp formatted in UTC and Dubai GST (UTC+4)."""
+        now_utc = datetime.now(timezone.utc)
+        gst_offset = timedelta(hours=4)
+        now_gst = now_utc + gst_offset
+        return f"{now_utc.strftime('%Y-%m-%d %H:%M:%S UTC')} ({now_gst.strftime('%H:%M:%S GST')})"
+
     def send_pre_entry_analysis(
         self,
         asset: str,
@@ -146,9 +155,11 @@ class TelegramNotifier:
 
         dir_str = direction.upper()
         emoji = "🟢" if dir_str == "BUY" else "🔴"
+        ts = self.format_timestamp()
 
         msg = (
-            f"🔍 *[{asset} RADAR — PRE-ENTRY DEAL ANALYSIS]*\n\n"
+            f"🔍 *[{asset} RADAR — PRE-ENTRY DEAL ANALYSIS]*\n"
+            f"📅 `Time:` {ts}\n\n"
             f"*Setup:* `{setup}`\n"
             f"*Market Bias:* *{dir_str}* {emoji}\n"
             f"*Timeframe:* `{timeframe}`\n\n"
@@ -198,8 +209,10 @@ class TelegramNotifier:
         tp3_units = abs(tp3 - entry) * mult
         tp4_units = abs(tp4 - entry) * mult
 
+        ts = self.format_timestamp()
         msg = (
-            f"{header}\n\n"
+            f"{header}\n"
+            f"📅 `Time:` {ts}\n\n"
             f"*Symbol:* `{asset}`\n"
             f"*Timeframe:* `{timeframe}`\n"
             f"*Ticket:* `#{ticket}`\n\n"
@@ -236,8 +249,10 @@ class TelegramNotifier:
             header = f"🛡️ *[AURUM STOP LOSS HIT — CONTROLLED RISK]*"
             pnl_str = f"-${abs(pnl):,.2f} ({r_mult:.2f}R)"
 
+        ts = self.format_timestamp()
         msg = (
-            f"{header}\n\n"
+            f"{header}\n"
+            f"📅 `Time:` {ts}\n\n"
             f"• *Asset:* `{asset}`\n"
             f"• *Ticket:* `#{ticket}` ({direction.upper()})\n"
             f"• *Realized PnL:* `{pnl_str}`\n"

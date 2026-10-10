@@ -23,9 +23,12 @@ def get_default_mt5_files_dir() -> Path:
         Path("/Users/nouh/Library/Application Support/net.metaquotes.wine.metatrader5/drive_c/Program Files/MetaTrader 5/MQL5/Files"),
     ]
     for c in candidates:
-        if c.exists():
-            return c
-    return candidates[0] if sys.platform.startswith("linux") else candidates[2]
+        try:
+            if c.exists():
+                return c
+        except Exception:
+            pass
+    return Path.home() / ".wine/drive_c/Program Files/MetaTrader 5/MQL5/Files" if sys.platform.startswith("linux") else candidates[2]
 
 
 def close_active_position(exit_price: float = 31033.0, reason: str = "MANUAL"):

@@ -40,8 +40,10 @@ def run_monte_carlo(
             "governance_note": "Insufficient sample size (N < 3) for sensitivity analysis."
         }
 
-    pnl_series = trades_df["pnl_cash"].values
-    r_series = trades_df["r_multiple"].values
+    pnl_col = "pnl_cash" if "pnl_cash" in trades_df.columns else "pnl"
+    r_col = "r_multiple" if "r_multiple" in trades_df.columns else "r"
+    pnl_series = trades_df[pnl_col].values
+    r_series = trades_df[r_col].values
     n = len(pnl_series)
     losses_count = int(np.sum(pnl_series < 0))
 

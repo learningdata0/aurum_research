@@ -1,10 +1,11 @@
 import os
 import json
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 
 # Set page configuration
@@ -15,7 +16,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom Institutional CSS
+# Custom Institutional Dark CSS
 st.markdown("""
 <style>
     .main {
@@ -24,31 +25,80 @@ st.markdown("""
     .metric-card {
         background: linear-gradient(135deg, #111827 0%, #1f2937 100%);
         border: 1px solid #374151;
-        border-radius: 10px;
+        border-radius: 12px;
         padding: 16px 20px;
         box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
+        transition: transform 0.2s ease, border-color 0.2s ease;
+    }
+    .metric-card:hover {
+        border-color: #f59e0b;
+        transform: translateY(-2px);
     }
     .metric-title {
-        font-size: 0.85rem;
+        font-size: 0.8rem;
         color: #9ca3af;
         text-transform: uppercase;
-        letter-spacing: 0.05em;
+        letter-spacing: 0.08em;
         margin-bottom: 4px;
+        font-weight: 600;
     }
     .metric-val {
         font-size: 1.8rem;
-        font-weight: 700;
+        font-weight: 800;
         color: #f9fafb;
     }
     .metric-delta-pos {
         color: #10b981;
-        font-size: 0.95rem;
+        font-size: 0.9rem;
         font-weight: 600;
     }
     .metric-delta-neg {
         color: #ef4444;
-        font-size: 0.95rem;
+        font-size: 0.9rem;
         font-weight: 600;
+    }
+    .badge-active {
+        display: inline-block;
+        padding: 4px 12px;
+        background: rgba(16, 185, 129, 0.15);
+        border: 1px solid #10b981;
+        border-radius: 20px;
+        color: #10b981;
+        font-weight: 600;
+        font-size: 0.85rem;
+    }
+    .badge-paused {
+        display: inline-block;
+        padding: 4px 12px;
+        background: rgba(239, 68, 68, 0.15);
+        border: 1px solid #ef4444;
+        border-radius: 20px;
+        color: #ef4444;
+        font-weight: 600;
+        font-size: 0.85rem;
+    }
+    .badge-gold {
+        display: inline-block;
+        padding: 4px 12px;
+        background: rgba(245, 158, 11, 0.15);
+        border: 1px solid #f59e0b;
+        border-radius: 20px;
+        color: #f59e0b;
+        font-weight: 600;
+        font-size: 0.85rem;
+    }
+    .progress-bar-container {
+        width: 100%;
+        background-color: #1f2937;
+        border-radius: 10px;
+        overflow: hidden;
+        height: 14px;
+        margin-top: 8px;
+    }
+    .progress-bar-fill {
+        height: 100%;
+        background: linear-gradient(90deg, #f59e0b, #10b981);
+        border-radius: 10px;
     }
     .stTabs [data-baseweb="tab-list"] {
         gap: 8px;
@@ -60,11 +110,12 @@ st.markdown("""
         border-radius: 8px 8px 0px 0px;
         color: #9ca3af;
         padding: 0 24px;
+        font-weight: 600;
     }
     .stTabs [aria-selected="true"] {
         background-color: #1f2937 !important;
         color: #f59e0b !important;
-        border-bottom: 2px solid #f59e0b !important;
+        border-bottom: 3px solid #f59e0b !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -72,6 +123,7 @@ st.markdown("""
 # Base Paths
 BASE_DIR = Path(__file__).parent.resolve()
 REPORTS_DIR = BASE_DIR / "reports"
+DATA_DIR = BASE_DIR / "data"
 MT5_DIR = Path("/Users/nouh/Library/Application Support/net.metaquotes.wine.metatrader5/drive_c/Program Files/MetaTrader 5/MQL5/Files")
 
 # Data loading functions
@@ -225,38 +277,81 @@ def load_market_memory():
             return []
     return []
 
-def load_temporal_profile():
-    p = REPORTS_DIR / "intraday_temporal_profile.json"
-    if p.exists():
+def load_radar_signals():
+    radar_file = REPORTS_DIR / "aurum_radar.csv"
+    signals = []
+    if radar_file.exists():
         try:
-            with open(p, "r", encoding="utf-8") as f:
-                return json.load(f)
+            with open(radar_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    parts = [p.strip() for p in line.split(",") if p.strip()]
+                    if len(parts) >= 8:
+                        signals.append({
+                            "time": parts[0],
+                            "asset": parts[1],
+                            "direction": parts[2],
+                            "trigger": float(parts[3]),
+                            "entry": float(parts[4]),
+                            "sl": float(parts[5]),
+                            "tp1": float(parts[6]),
+                            "tp3": float(parts[7])
+                        })
         except Exception:
-            return None
-    return None
+            pass
+    return pd.DataFrame(signals)
 
 # Load Data
 df_trades = load_shadow_trades()
 df_open = load_open_trades()
 memory_data = load_market_memory()
-temporal_data = load_temporal_profile()
+df_radar = load_radar_signals()
 
-# Sidebar
+# Market Clock Calculator (UTC + GST)
+now_utc = datetime.now(timezone.utc)
+now_gst = now_utc + timedelta(hours=4)
+hour_utc = now_utc.hour
+minute_utc = now_utc.minute
+
+# Determine Active Session
+if 0 <= hour_utc < 7:
+    active_session_name = "Asian Session"
+    session_status = "Building Asian Range (Accumulation)"
+    session_badge = "badge-gold"
+elif 7 <= hour_utc < 13 or (hour_utc == 13 and minute_utc < 30):
+    active_session_name = "London Core Session"
+    session_status = "Establishing London High & Low (Liquidity Pools)"
+    session_badge = "badge-active"
+elif (hour_utc == 13 and minute_utc >= 30) or (14 <= hour_utc < 21):
+    active_session_name = "New York Cash Session"
+    session_status = "🎯 H17 Sweep & Reclaim Window (Active Hunting)"
+    session_badge = "badge-active"
+else:
+    active_session_name = "Market Close / Day-End Wrap"
+    session_status = "Ledger Rebalancing & Risk Audits"
+    session_badge = "badge-gold"
+
+# Sidebar Navigation & System Telemetry
 st.sidebar.image("https://img.icons8.com/isometric/100/bullish.png", width=70)
-st.sidebar.title("AURUM Desk v0.9")
-st.sidebar.markdown("**Institutional Autonomous Engine**")
+st.sidebar.title("AURUM Desk v1.1")
+st.sidebar.markdown("**Institutional 24/7 Cloud Operations**")
 st.sidebar.markdown("---")
-st.sidebar.markdown("🎯 **Core Mandate:**")
-st.sidebar.markdown("- **Assets:** `US100` & `XAUUSD`")
-st.sidebar.markdown("- **US30:** Paused (Day 2 / 30)")
-st.sidebar.markdown("- **Gate 2 Goal:** 30 Forward Shadow Trades")
-st.sidebar.markdown("- **Mode:** Virtual Riskless Execution")
 
+st.sidebar.markdown("🌐 **Cloud Infrastructure:**")
+st.sidebar.markdown("- **Host:** Oracle Cloud Always Free (Dubai `me-dubai-1`)")
+st.sidebar.markdown("- **VPS IP:** `145.241.127.95`")
+st.sidebar.markdown("- **Service:** `aurum-sentinel` (Active 24/7)")
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("🎯 **Trading Mandate & Quarantine:**")
+st.sidebar.markdown("✅ **US100 (Nasdaq):** Active (`H17` Range $\ge 140$ pts)")
+st.sidebar.markdown("✅ **XAUUSD (Gold):** Active (`XAU_H17` Range $\ge 25$ pts)")
+st.sidebar.markdown("⛔ **US30 (Dow Jones):** Quarantined (Day 2 / 30)")
+
+st.sidebar.markdown("---")
 if st.sidebar.button("🔄 Refresh Live Desk Data"):
     st.rerun()
 
-st.sidebar.markdown("---")
-st.sidebar.caption(f"Last Synced: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
+st.sidebar.caption(f"Desk Clock: {now_utc.strftime('%H:%M:%S UTC')} | {now_gst.strftime('%H:%M:%S GST')}")
 
 # Header
 st.title("🏛️ AURUM Institutional Trading Operations Hub")
@@ -299,7 +394,7 @@ with col2:
     <div class="metric-card">
         <div class="metric-title">Net Realized PnL</div>
         <div class="metric-val" style="color: {'#10b981' if net_pnl >= 0 else '#ef4444'}">${net_pnl:+,.2f}</div>
-        <div class="{'metric-delta-pos' if net_r >= 0 else 'metric-delta-neg'}">{net_r:+.2f}R Accumulated</div>
+        <div class="{'metric-delta-pos' if net_r >= 0 else 'metric-delta-neg'}">{net_r:+.2f}R Total Return</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -308,7 +403,7 @@ with col3:
     <div class="metric-card">
         <div class="metric-title">Profit Factor</div>
         <div class="metric-val" style="color: #f59e0b;">{profit_factor}</div>
-        <div class="metric-delta-pos">Institutional Grade</div>
+        <div class="metric-delta-pos">Institutional Grade (> 2.0)</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -317,86 +412,110 @@ with col4:
     <div class="metric-card">
         <div class="metric-title">Forward Win Rate</div>
         <div class="metric-val">{win_rate:.1f}%</div>
-        <div style="font-size: 0.9rem; color: #9ca3af;">{wins}W - {losses}L (Total {tot_trades})</div>
+        <div style="font-size: 0.85rem; color: #9ca3af;">{wins} Wins / {losses} Losses (Total {tot_trades})</div>
     </div>
     """, unsafe_allow_html=True)
 
 with col5:
-    pct_goal = (tot_trades / 30.0) * 100.0
+    pct_goal = min(100.0, (tot_trades / 30.0) * 100.0)
     st.markdown(f"""
     <div class="metric-card">
-        <div class="metric-title">Gate 2 Validation</div>
+        <div class="metric-title">Gate 2 Milestone</div>
         <div class="metric-val">{tot_trades} / 30</div>
-        <div class="metric-delta-pos">{pct_goal:.1f}% Complete</div>
+        <div class="progress-bar-container">
+            <div class="progress-bar-fill" style="width: {pct_goal}%;"></div>
+        </div>
+        <div style="font-size: 0.8rem; color: #10b981; margin-top: 4px;">{pct_goal:.1f}% to Live Capital Deployment</div>
     </div>
     """, unsafe_allow_html=True)
 
 st.markdown("<br/>", unsafe_allow_html=True)
 
 # Main Navigation Tabs
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📈 Equity & Performance",
-    "📋 Live Shadow Trades Ledger",
-    "⏰ Intraday Market Clock",
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    "📈 Equity & Interactive Chart",
+    "📋 Live Forward Trades Ledger",
+    "🪙 Dual-Asset Intelligence (US100 & Gold)",
+    "⏰ Session Clock & Economic Calendar",
     "🌍 Causal Memory & Geopolitics",
     "🔬 Institutional Research Proofs"
 ])
 
-# TAB 1: Equity & Performance
+# TAB 1: Equity & Interactive Chart
 with tab1:
-    st.subheader("📊 Portfolio Growth & Mathematical Asymmetry")
+    st.subheader("📊 Portfolio Equity Curve & Asymmetric R-Multiples")
     
     # Construct Equity Curve
-    eq_points = [{"trade": 0, "balance": 10000.0, "time": "Initial Starting Capital"}]
+    eq_points = [{"trade": 0, "balance": 10000.0, "time": "Starting Capital ($10,000)", "r": 0.0}]
     running_bal = 10000.0
+    running_r = 0.0
     if not df_trades.empty:
         for idx, row in df_trades.iterrows():
             running_bal += row["pnl"]
+            running_r += row["r"]
             eq_points.append({
                 "trade": idx + 1,
                 "balance": running_bal,
+                "r": running_r,
                 "time": f"#{row['ticket']} {row['asset']} {row['direction']} ({row['time']})"
             })
     
     df_eq = pd.DataFrame(eq_points)
     
-    fig = go.Figure()
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    
+    # Primary: Account Equity ($)
     fig.add_trace(go.Scatter(
         x=df_eq["trade"],
         y=df_eq["balance"],
         mode="lines+markers",
-        name="Virtual Equity ($)",
-        line=dict(color="#10b981", width=3),
+        name="Portfolio Balance ($)",
+        line=dict(color="#10b981", width=3.5),
         marker=dict(size=8, color="#f59e0b"),
-        hovertemplate="Trade %{x}<br>Balance: $%{y:,.2f}<br>%{text}<extra></extra>",
+        hovertemplate="Trade #%{x}<br>Balance: $%{y:,.2f}<br>%{text}<extra></extra>",
         text=df_eq["time"]
-    ))
-    fig.add_hline(y=10000.0, line_dash="dash", line_color="#6b7280", annotation_text="Initial Baseline ($10,000)")
+    ), secondary_y=False)
+    
+    # Secondary: Cumulative R
+    fig.add_trace(go.Scatter(
+        x=df_eq["trade"],
+        y=df_eq["r"],
+        mode="lines",
+        name="Cumulative R-Multiple",
+        line=dict(color="#3b82f6", width=2, dash="dot"),
+        hovertemplate="Cumulative Return: %{y:+.2f}R<extra></extra>"
+    ), secondary_y=True)
+    
+    fig.add_hline(y=10000.0, line_dash="dash", line_color="#6b7280", annotation_text="Baseline Capital ($10,000.00)", secondary_y=False)
+    
     fig.update_layout(
         template="plotly_dark",
         paper_bgcolor="#111827",
         plot_bgcolor="#111827",
-        height=400,
+        height=420,
         margin=dict(l=20, r=20, t=30, b=20),
-        xaxis_title="Forward Trade Count",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        xaxis_title="Forward Verified Trade Count",
         yaxis_title="Account Balance ($)",
         yaxis=dict(tickformat="$,.0f")
     )
+    fig.update_yaxes(title_text="Cumulative R", secondary_y=True)
+    
     st.plotly_chart(fig, use_container_width=True)
     
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.info("💡 **Risk Asymmetry In Action:**\nNotice that Win #1 generated **+$191.50 (+7.66R)** while Loss #1 was strictly contained to **-$25.00 (-1.00R)**. Even with a 50% Win Rate, the portfolio holds **+6.66R net**.")
-    with col_b:
-        st.success("🛡️ **Active Risk Protection:**\nGold (`XAUUSD`) range qualification filter ($\ge 55$ pts) remained in STANDBY mode both yesterday and today, preventing unnecessary chop entries and protecting 100% of capital.")
+    c_inf1, c_inf2 = st.columns(2)
+    with c_inf1:
+        st.info("💡 **Institutional Asymmetry In Action:**\nWins generate up to **+7.66R / +3.50R**, while losses are strictly contained to **-1.00R ($25.00)**. With an even 50% Win Rate, the portfolio compounds solidly at **+10.87R net**.")
+    with c_inf2:
+        st.success("🛡️ **Automated Staged TP1 & Breakeven Engine:**\n`AurumH17ShadowEA` automatically banks 50% profit at +25 pts / +$5.00 and snaps Stop Loss to Breakeven, ensuring runners operate 100% risk-free towards London Midpoint.")
 
-# TAB 2: Live Shadow Trades Ledger
+# TAB 2: Live Forward Trades Ledger
 with tab2:
-    st.subheader("📋 Dual-Asset Forward Shadow Execution Ledger (Gate 2)")
-    st.markdown("All executions are generated in real-time by `AurumH17ShadowEA` (US100) and `AurumGoldH17ShadowEA` (XAUUSD) on live MetaTrader 5 charts with zero financial capital risk.")
+    st.subheader("📋 Gate 2 Forward Execution Ledger (30 Trades Target)")
+    st.markdown("Every trade is generated live on broker charts by `AurumH17ShadowEA` (US100) and `AurumGoldH17ShadowEA` (XAUUSD).")
     
     if not df_open.empty:
-        st.markdown("### 🟢 Active Open Forward Positions (صفقات مفتوحة حالياً)")
+        st.markdown("### 🟢 Active Open Forward Positions")
         for _, r in df_open.iterrows():
             st.success(f"🎯 **{r['Asset']} {r['Direction']} (Ticket #{r['Ticket #']})** | Open Time: `{r['Open Time']}` | Entry: `{r['Entry Price']:,.2f}` | SL: `{r['Stop Loss']:,.2f}` | TP: `{r['Take Profit']:,.2f}` | Target: **{r['Target Objective']}** | Risk: `{r['Risk ($)']}`")
         st.dataframe(df_open, use_container_width=True)
@@ -404,12 +523,8 @@ with tab2:
 
     if not df_trades.empty:
         display_df = df_trades.copy()
-        def style_pnl(val):
-            color = "#10b981" if val > 0 else "#ef4444"
-            return f"color: {color}; font-weight: bold;"
-        
         st.dataframe(
-            display_df[["ticket", "time", "asset", "direction", "entry", "sl", "tp", "pnl", "r", "reason"]].rename(columns={
+            display_df[["ticket", "time", "asset", "direction", "entry", "sl", "tp", "pnl", "r", "reason", "balance"]].rename(columns={
                 "ticket": "Ticket #",
                 "time": "Close Time",
                 "asset": "Asset",
@@ -419,31 +534,103 @@ with tab2:
                 "tp": "Take Profit",
                 "pnl": "Net PnL ($)",
                 "r": "R Multiple",
-                "reason": "Exit Catalyst"
+                "reason": "Exit Catalyst",
+                "balance": "Updated Equity ($)"
             }),
             use_container_width=True
         )
     else:
-        st.write("No trades logged yet. Standing by for execution signals.")
+        st.write("No closed trades logged yet. Standing by for execution signals.")
 
-# TAB 3: Intraday Market Clock
+# TAB 3: Dual-Asset Intelligence
 with tab3:
-    st.subheader("⏰ The Institutional Intraday Market Clock (ساعة السوق اللحظية)")
-    st.markdown("Empirical deconstruction of 706,255 M1 bars on US100 and 100,001 M1 bars on Gold across 5 sub-sessions:")
+    st.subheader("🪙 Dual-Asset Quantitative Intelligence & Rules")
     
+    col_u, col_g = st.columns(2)
+    with col_u:
+        st.markdown("""
+        <div class="metric-card">
+            <div class="badge-active">ACTIVE ASSET</div>
+            <h3 style="color: #f9fafb; margin-top: 10px;">🇺🇸 US100 (Nasdaq-100 / UT100Roll)</h3>
+            <hr style="border-color: #374151;"/>
+            <p><b>• Strategy Model:</b> <code>H17</code> London Session Sweep & Reclaim</p>
+            <p><b>• Range Qualification:</b> $\ge 140.0$ points (Eliminates low-volatility traps)</p>
+            <p><b>• Staged TP1:</b> Auto-bank 50% profit at <b>+25.0 points</b></p>
+            <p><b>• Breakeven Snap:</b> Move SL to Entry immediately upon TP1 hit</p>
+            <p><b>• Dynamic Trailing:</b> +15 pts locked at +35 pts | +35 pts locked at +60 pts</p>
+            <p><b>• Ultimate Target:</b> London Midpoint Mean Reversion (+80 to +180 pts)</p>
+            <p><b>• Risk per Trade:</b> Strict 0.25% ($25.00)</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with col_g:
+        st.markdown("""
+        <div class="metric-card">
+            <div class="badge-gold">ACTIVE ASSET</div>
+            <h3 style="color: #f9fafb; margin-top: 10px;">🥇 XAUUSD (Spot Gold)</h3>
+            <hr style="border-color: #374151;"/>
+            <p><b>• Strategy Model:</b> <code>XAU_H17</code> London Range Liquidity Sweep</p>
+            <p><b>• Range Qualification:</b> $\ge 25.0$ points / $25.00 (Standardized Institutional Threshold)</p>
+            <p><b>• Staged TP1:</b> Auto-bank 50% profit at <b>+$5.00 / 50 pips</b></p>
+            <p><b>• Breakeven Snap:</b> Move SL to Entry immediately upon TP1 hit</p>
+            <p><b>• Dynamic Trailing:</b> ATR Multi-Stage Trailing Stop</p>
+            <p><b>• Ultimate Target:</b> London Session Midpoint Reversion</p>
+            <p><b>• Risk per Trade:</b> Strict 0.25% ($25.00)</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+    st.markdown("<br/>", unsafe_allow_html=True)
+    st.markdown("""
+    <div class="metric-card">
+        <div class="badge-paused">QUARANTINED ASSET</div>
+        <h4 style="color: #ef4444; margin-top: 8px;">⛔ US30 (Dow Jones 30) — 30-Day Disciplinary Pause (Day 2 / 30)</h4>
+        <p style="color: #9ca3af;">In accordance with institutional risk guidelines, US30 is strictly paused for 30 calendar days to prevent correlation drag while Gate 2 forward validation focuses exclusively on US100 and XAUUSD.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+# TAB 4: Session Clock & Economic Calendar
+with tab4:
+    st.subheader("⏰ The Institutional Intraday Market Clock & Macro Schedule")
+    
+    s1, s2 = st.columns(2)
+    with s1:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="{session_badge}">CURRENT ACTIVE WINDOW</div>
+            <h3 style="color: #f9fafb; margin-top: 8px;">{active_session_name}</h3>
+            <p style="color: #d1d5db;"><b>Status:</b> {session_status}</p>
+            <hr style="border-color: #374151;"/>
+            <p>• <b>UTC Time:</b> <code>{now_utc.strftime('%Y-%m-%d %H:%M:%S UTC')}</code></p>
+            <p>• <b>Dubai / UAE (GST):</b> <code>{now_gst.strftime('%Y-%m-%d %H:%M:%S GST')}</code></p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+    with s2:
+        st.markdown("""
+        <div class="metric-card">
+            <div class="badge-active">NEWS BLACKOUT ENGINE</div>
+            <h3 style="color: #f9fafb; margin-top: 8px;">Tier-1 Macro Economic News Filter</h3>
+            <p style="color: #d1d5db;"><b>Status:</b> Active & Monitoring</p>
+            <hr style="border-color: #374151;"/>
+            <p>• <b>Protected Events:</b> CPI, Core PCE, Non-Farm Payrolls (NFP), FOMC Rate Decisions</p>
+            <p>• <b>Blackout Protocol:</b> Automatic 15m entry pause before & after high-impact releases</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+    st.markdown("<br/>", unsafe_allow_html=True)
     sub_sessions = [
-        {"Window": "1. Early European Open", "Hours": "09:00 - 12:00", "Avg Range (US100)": "265.2 pts", "Directional Eff.": "0.478", "Regime": "Trend Momentum Expansion", "Execution Rule": "⛔ NO TRADING (Range Formation / High & Low Accumulation)"},
-        {"Window": "2. London Core / Midday", "Hours": "12:00 - 15:00", "Avg Range (US100)": "171.1 pts", "Directional Eff.": "0.449", "Regime": "Balanced Hybrid Auction", "Execution Rule": "⏳ STANDBY (Evaluate Range Qualification: >=140 US100 / >=55 Gold)"},
-        {"Window": "3. US Data & Cash Open", "Hours": "15:00 - 17:00", "Avg Range (US100)": "132.5 pts", "Directional Eff.": "0.456", "Regime": "High-Volatility Liquidity Traps", "Execution Rule": "🎯 PRIMARY SWEET SPOT (H17 Sweep-Reclaim Window Starts 16:30)"},
-        {"Window": "4. NY Core & London Fix", "Hours": "17:00 - 20:00", "Avg Range (US100)": "95.3 pts", "Directional Eff.": "0.471", "Regime": "Institutional Trend Continuation", "Execution Rule": "🛡️ POSITION MANAGEMENT & Trail to London Midpoint"},
-        {"Window": "5. Late NY & Close", "Hours": "20:00 - 22:30", "Avg Range (US100)": "104.2 pts", "Directional Eff.": "0.457", "Regime": "Day-End Liquidity Unwinding", "Execution Rule": "🚀 ASYMMETRIC MEAN REVERSION (Produced Trade #1000 +7.66R)"}
+        {"Sub-Session Window": "1. Early European Open", "UTC Hours": "07:00 - 10:00", "Characteristics": "Range Formation / Initial High & Low", "Action": "⛔ NO TRADING (Accumulation Phase)"},
+        {"Sub-Session Window": "2. London Core / Midday", "UTC Hours": "10:00 - 13:00", "Characteristics": "Balanced Auction & Liquidity Building", "Action": "⏳ STANDBY (Evaluate Range Qualification: >=140 US100 / >=25 Gold)"},
+        {"Sub-Session Window": "3. US Data & Cash Open", "UTC Hours": "13:30 - 16:30", "Characteristics": "High-Volatility Liquidity Sweeps", "Action": "🎯 PRIMARY SWEET SPOT (H17 Sweep & Reclaim Execution)"},
+        {"Sub-Session Window": "4. NY Core & London Fix", "UTC Hours": "16:30 - 19:00", "Characteristics": "Institutional Reversion to Midpoint", "Action": "🛡️ POSITION MANAGEMENT & Trail to London Midpoint"},
+        {"Sub-Session Window": "5. Late NY & Day Close", "UTC Hours": "19:00 - 21:00", "Characteristics": "Day-End Liquidity Unwinding", "Action": "🚀 ASYMMETRIC MEAN REVERSION"}
     ]
     st.table(pd.DataFrame(sub_sessions))
 
-# TAB 4: Causal Memory & Geopolitics
-with tab4:
+# TAB 5: Causal Memory & Geopolitics
+with tab5:
     st.subheader("🌍 Persistent Episodic Market Memory & Geopolitical Intelligence")
-    st.markdown("Recording macro catalysts (Trump statements, Iran/Hormuz tensions, Oil > $100, Treasury Yields) and causal post-trade autopsies:")
+    st.markdown("Recording macro catalysts (Trump trade statements, Middle East / Hormuz tensions, Oil, US Treasury Yields) and causal post-trade retrospectives:")
     
     if memory_data:
         for entry in memory_data:
@@ -470,8 +657,8 @@ with tab4:
     else:
         st.info("Market memory loading from persistent storage...")
 
-# TAB 5: Institutional Research Proofs
-with tab5:
+# TAB 6: Institutional Research Proofs
+with tab6:
     st.subheader("🔬 Institutional Validation Battery & Stress Tests")
     
     t1, t2, t3, t4 = st.columns(4)

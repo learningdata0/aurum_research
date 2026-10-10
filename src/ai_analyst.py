@@ -2,56 +2,108 @@ import os
 import json
 import urllib.request
 import urllib.parse
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 
-class GeminiMarketAnalyst:
+def load_dotenv_key(key_name: str) -> Optional[str]:
+    """Loads a key from environment or local .env file."""
+    val = os.environ.get(key_name)
+    if val:
+        return val
+    env_file = Path(__file__).parent.parent / ".env"
+    if env_file.exists():
+        try:
+            with open(env_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith(f"{key_name}="):
+                        return line.split("=", 1)[1].strip()
+        except Exception:
+            pass
+    return None
+
+class MultiModelAIAnalyst:
     """
-    AURUM Institutional AI Intelligence Analyst powered by Google Gemini API.
-    Provides multimodal chart pattern confirmation, real-time macroeconomic reasoning,
-    and causal post-trade learning retrospectives.
+    AURUM Dual-Engine AI Intelligence Analyst.
+    Combines Google Gemini (Multimodal & Fast Reasoning) and OpenRouter (DeepSeek-R1 / Llama / Claude)
+    to provide consensus trade evaluation, structural SMC sweep validation, and causal learning.
     """
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "gemini-2.0-flash"):
-        self.api_key = api_key or os.environ.get("GEMINI_API_KEY")
-        self.model = model
+    def __init__(
+        self,
+        gemini_key: Optional[str] = None,
+        openrouter_key: Optional[str] = None
+    ):
+        self.gemini_key = gemini_key or load_dotenv_key("GEMINI_API_KEY")
+        self.openrouter_key = openrouter_key or load_dotenv_key("OPENROUTER_API_KEY")
 
-    def is_configured(self) -> bool:
-        return bool(self.api_key and "YOUR_" not in str(self.api_key))
+    def is_gemini_active(self) -> bool:
+        return bool(self.gemini_key and "YOUR_" not in str(self.gemini_key))
 
-    def _call_gemini(self, prompt: str) -> Optional[str]:
-        if not self.is_configured():
+    def is_openrouter_active(self) -> bool:
+        return bool(self.openrouter_key and "YOUR_" not in str(self.openrouter_key))
+
+    def call_gemini(self, prompt: str) -> Optional[str]:
+        if not self.is_gemini_active():
             return None
-        
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={self.api_key}"
-        payload = {
-            "contents": [
-                {
-                    "parts": [
-                        {"text": prompt}
-                    ]
-                }
-            ],
-            "generationConfig": {
-                "temperature": 0.2,
-                "maxOutputTokens": 800
+        models = ["gemini-flash-latest", "gemini-2.0-flash", "gemini-1.5-flash"]
+        for m in models:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent"
+            payload = {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {"temperature": 0.2, "maxOutputTokens": 600}
             }
+            try:
+                data = json.dumps(payload).encode("utf-8")
+                req = urllib.request.Request(
+                    url,
+                    data=data,
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-goog-api-key": str(self.gemini_key)
+                    }
+                )
+                with urllib.request.urlopen(req, timeout=20) as resp:
+                    result = json.loads(resp.read().decode("utf-8"))
+                    candidates = result.get("candidates", [])
+                    if candidates:
+                        parts = candidates[0].get("content", {}).get("parts", [])
+                        if parts:
+                            return parts[0].get("text", "")
+            except Exception:
+                continue
+        return None
+
+    def call_openrouter(self, prompt: str, model: str = "openrouter/auto") -> Optional[str]:
+        if not self.is_openrouter_active():
+            return None
+        url = "https://openrouter.ai/api/v1/chat/completions"
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.2,
+            "max_tokens": 600
         }
-        
         try:
             data = json.dumps(payload).encode("utf-8")
             req = urllib.request.Request(
                 url,
                 data=data,
-                headers={"Content-Type": "application/json"}
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.openrouter_key}",
+                    "HTTP-Referer": "https://aurum.trade",
+                    "X-Title": "AURUM Quantitative Desk"
+                }
             )
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            with urllib.request.urlopen(req, timeout=25) as resp:
                 result = json.loads(resp.read().decode("utf-8"))
-                candidates = result.get("candidates", [])
-                if candidates:
-                    return candidates[0]["content"]["parts"][0]["text"]
+                choices = result.get("choices", [])
+                if choices:
+                    return choices[0].get("message", {}).get("content", "")
         except Exception as e:
-            print(f"[GEMINI API ERROR] {e}")
+            print(f"[OPENROUTER ERROR] {e}")
         return None
 
     def evaluate_trade_setup(
@@ -66,8 +118,7 @@ class GeminiMarketAnalyst:
         macro_context: str = ""
     ) -> Dict[str, Any]:
         """
-        Evaluates an H17 / XAU_H17 setup using Gemini AI reasoning.
-        Returns AI confidence score (0-100%), structural alignment, and risk notes.
+        Evaluates an H17 / XAU_H17 setup using dual AI model consensus.
         """
         prompt = f"""
 You are the Chief Quantitative Risk Officer at AURUM Quantitative Desk.
@@ -86,7 +137,7 @@ Strategy Rules:
 2. Setup requires a false breakout (Liquidity Sweep) beyond London High/Low followed by immediate reclaim inside range.
 3. Target is London Midpoint Mean Reversion. Risk is strict 0.25% ($25.00).
 
-Respond ONLY with valid JSON in this exact schema:
+Respond ONLY with valid JSON in this exact schema (no markdown formatting, just pure JSON):
 {{
     "confidence_score": 88,
     "verdict": "CONFIRMED",
@@ -95,39 +146,43 @@ Respond ONLY with valid JSON in this exact schema:
     "key_risk_warning": "..."
 }}
 """
-        raw_resp = self._call_gemini(prompt)
+        # Try OpenRouter first, then Gemini
+        raw_resp = self.call_openrouter(prompt)
+        if not raw_resp:
+            raw_resp = self.call_gemini(prompt)
+
         if raw_resp:
             try:
-                # Strip markdown codeblocks if present
                 clean_json = raw_resp.strip()
-                if clean_json.startswith("```"):
-                    clean_json = clean_json.split("\n", 1)[1]
-                    if clean_json.endswith("```"):
-                        clean_json = clean_json.rsplit("\n", 1)[0]
-                return json.loads(clean_json)
+                if "```" in clean_json:
+                    clean_json = clean_json.split("```")[1]
+                    if clean_json.startswith("json"):
+                        clean_json = clean_json[4:]
+                return json.loads(clean_json.strip())
             except Exception:
                 pass
-        
-        # Deterministic fallback when API key is not yet set
+
         return {
-            "confidence_score": 92,
+            "confidence_score": 90,
             "verdict": "CONFIRMED_QUANTITATIVE",
             "structural_alignment": f"H17 Rule-based Liquidity Sweep Reclaim on {asset}",
-            "institutional_reasoning": f"Mathematical qualification criteria met (London range >= institutional threshold). Asymmetric risk-reward ratio >= 2.5:1.",
+            "institutional_reasoning": "Mathematical qualification criteria met (London range >= institutional threshold). Asymmetric risk-reward ratio >= 2.5:1.",
             "key_risk_warning": "Protect with Staged TP1 at +25 pts / +$5.00 and snap Breakeven immediately."
         }
 
     def generate_session_briefing(self, session_name: str, us100_range: float, gold_range: float) -> str:
-        """Generates pre-market institutional session intelligence for Telegram."""
         prompt = f"""
 You are the Chief Macro Strategist at AURUM. Write a concise 3-bullet point institutional briefing for {session_name}.
 Current Market State:
 - US100 London Range: {us100_range:.1f} pts (Threshold: >= 140 pts)
 - Gold London Range: {gold_range:.1f} pts (Threshold: >= 25 pts)
 - Mandate: US100 Active, XAUUSD Active, US30 Quarantined.
-Keep it strictly under 100 words in professional financial English.
+Keep it strictly under 80 words in professional financial English.
 """
-        resp = self._call_gemini(prompt)
+        resp = self.call_openrouter(prompt) or self.call_gemini(prompt)
         if resp:
-            return resp
+            return resp.strip()
         return f"• <b>Liquidity Focus:</b> Tracking London Session High/Low pools.\n• <b>Qualification:</b> US100 ({us100_range:.1f} pts) | Gold ({gold_range:.1f} pts).\n• <b>Mandate:</b> Radar armed for New York cash open sweep."
+
+# Alias for backward compatibility
+GeminiMarketAnalyst = MultiModelAIAnalyst

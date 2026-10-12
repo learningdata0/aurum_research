@@ -88,10 +88,12 @@ class TelegramNotifier:
             return False
 
         url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+        # Auto-detect HTML vs Markdown
+        parse_mode = "HTML" if ("<b" in text or "<code" in text or "<i" in text or "</" in text) else "Markdown"
         payload = {
             "chat_id": self.chat_id,
             "text": text,
-            "parse_mode": "Markdown",
+            "parse_mode": parse_mode,
             "disable_web_page_preview": True
         }
 
@@ -111,6 +113,24 @@ class TelegramNotifier:
                     self._dedup_cache[content_hash] = now
                     self._save_dedup_cache()
                 return ok
+        except urllib.error.HTTPError as he:
+            # Fallback to unformatted plain text delivery if entity parsing fails
+            try:
+                payload["parse_mode"] = None
+                data = json.dumps(payload).encode("utf-8")
+                req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    result = json.loads(resp.read().decode("utf-8"))
+                    ok = result.get("ok", False)
+                    if ok:
+                        if dedup_key:
+                            self._dedup_cache[dedup_key] = now
+                        self._dedup_cache[content_hash] = now
+                        self._save_dedup_cache()
+                    return ok
+            except Exception as e2:
+                print(f"[TELEGRAM ERROR] Plain text fallback failed: {e2}")
+            print(f"[TELEGRAM ERROR] Failed to send alert: {he}")
         except Exception as e:
             print(f"[TELEGRAM ERROR] Failed to send alert: {e}")
             return False

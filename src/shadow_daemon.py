@@ -550,6 +550,9 @@ class ShadowTradingDaemon:
                     parts = [p.strip() for p in line.split(",") if p.strip()]
                 if len(parts) >= 10:
                     t_str, sym, dir_str, trig_lvl, e_entry, e_sl, tp1, tp2, tp3, tp4 = parts[:10]
+                    today_prefix = datetime.now(timezone.utc).strftime("%Y.%m.%d")
+                    if not t_str.startswith(today_prefix):
+                        continue
                     key = f"{t_str}_{sym}_{dir_str}"
                     if key not in self._notified_radar:
                         self._notified_radar.add(key)
@@ -610,7 +613,9 @@ class ShadowTradingDaemon:
                 f"━━━━━━━━━━━━━━━━━━━━━\n"
                 f"✅ <i>All quantitative filters, MQL5 files, and Telegram engines operating normally.</i>"
             )
-            self.notifier.send_message(hb_msg, dedup_key=dedup_hb, cooldown_seconds=1800)
+            sent_hb = self.notifier.send_message(hb_msg, dedup_key=dedup_hb, cooldown_seconds=1800)
+            if sent_hb:
+                print(f"[{now_utc.strftime('%H:%M:%S UTC')}] [HEARTBEAT] Dispatched system heartbeat alert to Telegram.")
 
         # 2. Comprehensive Intraday Session Open / Close Milestones
         milestones = [

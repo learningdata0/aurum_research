@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import json
 import os
 from pathlib import Path
@@ -580,8 +580,11 @@ class ShadowTradingDaemon:
         minute = now_utc.minute
         day_str = now_utc.strftime("%Y-%m-%d")
 
-        # 1. 2-Hour Sentinel Health & System Heartbeat (Even hours at :00)
-        if hour % 2 == 0 and minute == 0:
+        # 1. Regular Sentinel Health & System Heartbeat (Every 1-2 hours)
+        now_ts = time.time()
+        last_hb = getattr(self, "_last_heartbeat_ts", 0.0)
+        if (now_ts - last_hb) >= 3600 or last_hb == 0.0:
+            self._last_heartbeat_ts = now_ts
             dedup_hb = f"heartbeat_{day_str}_{hour}"
             try:
                 import shutil
@@ -594,18 +597,12 @@ class ShadowTradingDaemon:
             except Exception:
                 sys_telemetry = "• <b>VPS Health:</b> Active (Oracle Cloud me-dubai-1)\n"
 
-            # Parse current forward stats
-            try:
-                from .shadow_daemon import load_shadow_trades_from_files
-            except Exception:
-                pass
-
             hb_msg = (
-                f"🛡️ <b>AURUM DESK 2-HOUR SYSTEM HEARTBEAT</b>\n"
+                f"🛡️ <b>AURUM DESK SYSTEM STATUS & HEARTBEAT</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━\n"
                 f"🕒 <b>Clock:</b> {now_utc.strftime('%H:%M:%S UTC')} | {now_gst.strftime('%H:%M:%S GST')}\n"
                 f"🌐 <b>Host:</b> Oracle Cloud VPS (`145.241.127.95`)\n"
-                f"⚙️ <b>Daemon:</b> <code>aurum-sentinel.service</code> [HEALTHY]\n"
+                f"⚙️ <b>Daemon:</b> <code>aurum-sentinel.service</code> [ONLINE & ACTIVE]\n"
                 f"{sys_telemetry}"
                 f"📊 <b>Gate 2 Ledger:</b> 14 / 30 Verified Trades (46.7%)\n"
                 f"💰 <b>Portfolio Return:</b> +$271.52 (+10.87R) | PF: 2.54 | WR: 50.0%\n"
@@ -613,7 +610,7 @@ class ShadowTradingDaemon:
                 f"━━━━━━━━━━━━━━━━━━━━━\n"
                 f"✅ <i>All quantitative filters, MQL5 files, and Telegram engines operating normally.</i>"
             )
-            self.notifier.send_message(hb_msg, dedup_key=dedup_hb, cooldown_seconds=3600)
+            self.notifier.send_message(hb_msg, dedup_key=dedup_hb, cooldown_seconds=1800)
 
         # 2. Comprehensive Intraday Session Open / Close Milestones
         milestones = [
@@ -641,8 +638,8 @@ class ShadowTradingDaemon:
         # 3. Economic News Alerts (Check every 5 mins)
         if minute % 5 == 0:
             try:
-                from .news_filter import NewsFilter
-                nf = NewsFilter()
+                from .news_filter import EconomicNewsFilter
+                nf = EconomicNewsFilter()
                 active_events = nf.get_upcoming_events(lookahead_minutes=30)
                 for ev in active_events:
                     ev_key = f"news_{ev['name']}_{ev['time']}"

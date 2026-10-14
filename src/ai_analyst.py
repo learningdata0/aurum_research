@@ -33,16 +33,21 @@ class MultiModelAIAnalyst:
     def __init__(
         self,
         gemini_key: Optional[str] = None,
-        openrouter_key: Optional[str] = None
+        openrouter_key: Optional[str] = None,
+        apinex_key: Optional[str] = None
     ):
         self.gemini_key = gemini_key or load_dotenv_key("GEMINI_API_KEY")
         self.openrouter_key = openrouter_key or load_dotenv_key("OPENROUTER_API_KEY")
+        self.apinex_key = apinex_key or load_dotenv_key("APINEX_API_KEY")
 
     def is_gemini_active(self) -> bool:
         return bool(self.gemini_key and "YOUR_" not in str(self.gemini_key))
 
     def is_openrouter_active(self) -> bool:
         return bool(self.openrouter_key and "YOUR_" not in str(self.openrouter_key))
+
+    def is_apinex_active(self) -> bool:
+        return bool(self.apinex_key and "YOUR_" not in str(self.apinex_key))
 
     def call_gemini(self, prompt: str) -> Optional[str]:
         if not self.is_gemini_active():
@@ -106,6 +111,38 @@ class MultiModelAIAnalyst:
             print(f"[OPENROUTER ERROR] {e}")
         return None
 
+    def call_apinex(self, prompt: str, model: str = "free/deepseek-v4.1-flash") -> Optional[str]:
+        if not self.is_apinex_active():
+            return None
+        url = "https://api.apinex.bond/v1/chat/completions"
+        candidate_models = [model, "free/deepseek-v4-pro-0813", "free/gpt-6-luna", "free/qwen-3.8-max"]
+        for m in candidate_models:
+            payload = {
+                "model": m,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.2,
+                "max_tokens": 600
+            }
+            try:
+                data = json.dumps(payload).encode("utf-8")
+                req = urllib.request.Request(
+                    url,
+                    data=data,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {self.apinex_key}",
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                    }
+                )
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    result = json.loads(resp.read().decode("utf-8"))
+                    choices = result.get("choices", [])
+                    if choices:
+                        return choices[0].get("message", {}).get("content", "")
+            except Exception:
+                continue
+        return None
+
     def evaluate_trade_setup(
         self,
         asset: str,
@@ -118,7 +155,8 @@ class MultiModelAIAnalyst:
         macro_context: str = ""
     ) -> Dict[str, Any]:
         """
-        Evaluates an H17 / XAU_H17 setup using dual AI model consensus.
+        Evaluates an H17 / XAU_H17 setup using multi-model AI consensus across Google Gemini,
+        OpenRouter (DeepSeek-R1 / Claude), and Apinex (DeepSeek-v4 / Qwen-3.8).
         """
         prompt = f"""
 You are the Chief Quantitative Risk Officer at AURUM Quantitative Desk.
@@ -146,10 +184,12 @@ Respond ONLY with valid JSON in this exact schema (no markdown formatting, just 
     "key_risk_warning": "..."
 }}
 """
-        # Try OpenRouter first, then Gemini
+        # Try OpenRouter first, then Gemini, then Apinex
         raw_resp = self.call_openrouter(prompt)
         if not raw_resp:
             raw_resp = self.call_gemini(prompt)
+        if not raw_resp:
+            raw_resp = self.call_apinex(prompt)
 
         if raw_resp:
             try:
@@ -179,7 +219,7 @@ Current Market State:
 - Mandate: US100 Active, XAUUSD Active, US30 Quarantined.
 Keep it strictly under 80 words in professional financial English.
 """
-        resp = self.call_openrouter(prompt) or self.call_gemini(prompt)
+        resp = self.call_openrouter(prompt) or self.call_gemini(prompt) or self.call_apinex(prompt)
         if resp:
             return resp.strip()
         return f"• <b>Liquidity Focus:</b> Tracking London Session High/Low pools.\n• <b>Qualification:</b> US100 ({us100_range:.1f} pts) | Gold ({gold_range:.1f} pts).\n• <b>Mandate:</b> Radar armed for New York cash open sweep."

@@ -25,6 +25,7 @@ class TelegramNotifier:
         self.dedup_cache_file = Path(dedup_cache_path)
         self.bot_token: Optional[str] = os.environ.get("AURUM_TELEGRAM_BOT_TOKEN")
         self.chat_id: Optional[str] = os.environ.get("AURUM_TELEGRAM_CHAT_ID")
+        self._muted: bool = os.environ.get("AURUM_TELEGRAM_MUTED", "false").lower() in ("true", "1")
         self._dedup_cache: Dict[str, float] = {}
         self._load_config()
         self._load_dedup_cache()
@@ -38,6 +39,8 @@ class TelegramNotifier:
                         self.bot_token = cfg.get("bot_token")
                     if not self.chat_id:
                         self.chat_id = str(cfg.get("chat_id"))
+                    if "muted" in cfg:
+                        self._muted = bool(cfg.get("muted"))
             except Exception:
                 pass
 
@@ -61,6 +64,11 @@ class TelegramNotifier:
         except Exception:
             pass
 
+    def is_muted(self) -> bool:
+        if os.environ.get("AURUM_TELEGRAM_MUTED", "").lower() in ("true", "1"):
+            return True
+        return bool(self._muted)
+
     def is_configured(self) -> bool:
         if not self.bot_token or not self.chat_id or "YOUR_" in str(self.bot_token) or self.chat_id == "None":
             self._load_config()
@@ -68,6 +76,10 @@ class TelegramNotifier:
 
     def send_message(self, text: str, dedup_key: Optional[str] = None, cooldown_seconds: int = 1800) -> bool:
         """Sends a markdown-formatted message to the configured Telegram chat with deduplication."""
+        if self.is_muted():
+            print(f"[TELEGRAM MUTED] Alert delivery silenced by user request.")
+            return False
+
         if not self.is_configured():
             print(f"[TELEGRAM STANDBY] Not configured yet. Alert queued:\n{text}")
             return False

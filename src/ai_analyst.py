@@ -49,6 +49,40 @@ class MultiModelAIAnalyst:
     def is_apinex_active(self) -> bool:
         return bool(self.apinex_key and "YOUR_" not in str(self.apinex_key))
 
+    def is_ollama_minimax_active(self) -> bool:
+        try:
+            req = urllib.request.Request("http://127.0.0.1:11434/api/tags")
+            with urllib.request.urlopen(req, timeout=1.0) as resp:
+                return resp.status == 200
+        except Exception:
+            return False
+
+    def call_ollama_minimax(self, prompt: str, max_tokens: int = 800) -> Optional[str]:
+        if not self.is_ollama_minimax_active():
+            return None
+        url = "http://127.0.0.1:11434/v1/chat/completions"
+        payload = {
+            "model": "minimax-m3.1-flash:cloud",
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.2,
+            "max_tokens": max_tokens
+        }
+        try:
+            data = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=data,
+                headers={"Content-Type": "application/json"}
+            )
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                result = json.loads(resp.read().decode("utf-8"))
+                choices = result.get("choices", [])
+                if choices:
+                    return choices[0].get("message", {}).get("content", "")
+        except Exception:
+            pass
+        return None
+
     def call_gemini(self, prompt: str) -> Optional[str]:
         if not self.is_gemini_active():
             return None
@@ -184,8 +218,10 @@ Respond ONLY with valid JSON in this exact schema (no markdown formatting, just 
     "key_risk_warning": "..."
 }}
 """
-        # Try OpenRouter first, then Gemini, then Apinex
-        raw_resp = self.call_openrouter(prompt)
+        # Multi-model consensus order: Ollama MiniMax (if local) -> OpenRouter -> Gemini -> Apinex
+        raw_resp = self.call_ollama_minimax(prompt)
+        if not raw_resp:
+            raw_resp = self.call_openrouter(prompt)
         if not raw_resp:
             raw_resp = self.call_gemini(prompt)
         if not raw_resp:
@@ -219,10 +255,29 @@ Current Market State:
 - Mandate: US100 Active, XAUUSD Active, US30 Quarantined.
 Keep it strictly under 80 words in professional financial English.
 """
-        resp = self.call_openrouter(prompt) or self.call_gemini(prompt) or self.call_apinex(prompt)
+        resp = self.call_ollama_minimax(prompt) or self.call_openrouter(prompt) or self.call_gemini(prompt) or self.call_apinex(prompt)
         if resp:
             return resp.strip()
         return f"• <b>Liquidity Focus:</b> Tracking London Session High/Low pools.\n• <b>Qualification:</b> US100 ({us100_range:.1f} pts) | Gold ({gold_range:.1f} pts).\n• <b>Mandate:</b> Radar armed for New York cash open sweep."
+
+    def audit_deep_memory(self, large_context: str, instruction: str = "Perform institutional risk and strategy audit.") -> Optional[str]:
+        """
+        Leverages MiniMax M3.1 Flash's 1-million token context window to perform deep retrospective audits
+        across massive historical journals, trade logs, and multi-asset market memory.
+        """
+        prompt = f"""
+You are the Executive Quantitative Auditor at AURUM Quantitative Desk.
+{instruction}
+
+Comprehensive Dataset / Context:
+{large_context}
+
+Provide a rigorous institutional report covering:
+1. Mathematical Edge & Factor Attribution
+2. Regime Fragility & Tail-Risk Vulnerabilities
+3. Actionable Algorithmic Optimizations for US100 and Gold
+"""
+        return self.call_ollama_minimax(prompt, max_tokens=1500) or self.call_gemini(prompt)
 
 # Alias for backward compatibility
 GeminiMarketAnalyst = MultiModelAIAnalyst

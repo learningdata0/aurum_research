@@ -583,41 +583,8 @@ class ShadowTradingDaemon:
         minute = now_utc.minute
         day_str = now_utc.strftime("%Y-%m-%d")
 
-        # 1. Routine Sentinel Health & System Heartbeat (Disabled by default: Event-Driven Mode active)
-        enable_routine_hb = os.environ.get("AURUM_ENABLE_HEARTBEAT", "false").lower() in ("true", "1")
-        if enable_routine_hb:
-            now_ts = time.time()
-            last_hb = getattr(self, "_last_heartbeat_ts", 0.0)
-            if (now_ts - last_hb) >= 7200 or last_hb == 0.0:  # 2 hours if enabled
-                self._last_heartbeat_ts = now_ts
-                dedup_hb = f"heartbeat_{day_str}_{hour}"
-                try:
-                    import shutil
-                    total, used, free = shutil.disk_usage('/')
-                    disk_pct = (used / total) * 100.0
-                    load1, load5, _ = os.getloadavg()
-                    sys_telemetry = (
-                        f"• <b>VPS System Health:</b> CPU Load {load1:.2f} | Disk Usage {disk_pct:.1f}% (Free {free/(1024**3):.1f} GB)\n"
-                    )
-                except Exception:
-                    sys_telemetry = "• <b>VPS Health:</b> Active (Oracle Cloud me-dubai-1)\n"
-
-                hb_msg = (
-                    f"🛡️ <b>AURUM DESK SYSTEM STATUS & HEARTBEAT</b>\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"🕒 <b>Clock:</b> {now_utc.strftime('%H:%M:%S UTC')} | {now_gst.strftime('%H:%M:%S GST')}\n"
-                    f"🌐 <b>Host:</b> Oracle Cloud VPS (`145.241.127.95`)\n"
-                    f"⚙️ <b>Daemon:</b> <code>aurum-sentinel.service</code> [ONLINE & ACTIVE]\n"
-                    f"{sys_telemetry}"
-                    f"📊 <b>Gate 2 Ledger:</b> 14 / 30 Verified Trades (46.7%)\n"
-                    f"💰 <b>Portfolio Return:</b> +$271.52 (+10.87R) | PF: 2.54 | WR: 50.0%\n"
-                    f"🎯 <b>Mandate:</b> US100 (Active) • XAUUSD (Active) • US30 (Quarantined)\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"✅ <i>All quantitative filters, MQL5 files, and Telegram engines operating normally.</i>"
-                )
-                sent_hb = self.notifier.send_message(hb_msg, dedup_key=dedup_hb, cooldown_seconds=1800)
-                if sent_hb:
-                    print(f"[{now_utc.strftime('%H:%M:%S UTC')}] [HEARTBEAT] Dispatched system heartbeat alert to Telegram.")
+        # 1. Routine Sentinel Health & System Heartbeat: PERMANENTLY DISABLED (45+ days mute)
+        # Periodic status messages are completely silenced. The desk runs strictly in silent event-driven mode.
 
         # 2. Comprehensive Intraday Session Open / Close Milestones
         milestones = [

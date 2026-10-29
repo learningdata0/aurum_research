@@ -1,0 +1,2 @@
+ticket,time,action,symbol,direction,entry,sl,tp,pnl,r_mult,reason,balance
+2001,2026.10.29 12:14,OPEN,XAUUSD,SELL,4030.00,4038.00,4018.00,0.00,0.00,SIGNAL_ENTRY,10000.00

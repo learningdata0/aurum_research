@@ -1,0 +1,36 @@
+{
+  "US100 (Nasdaq-100)": {
+    "asset": "US100 (Nasdaq-100)",
+    "total_bars": 706255,
+    "price_start": 19985.23,
+    "price_end": 30262.56,
+    "mean_m1_bar_range": 9.47,
+    "median_m1_bar_range": 6.83,
+    "p95_m1_bar_range": 25.67,
+    "daily_volatility_pct": 1.39,
+    "overall_hurst_exponent": 0.95,
+    "kaufman_efficiency_ratio": 0.099,
+    "regime_distribution": {
+      "mean_reverting_pct": 0.0,
+      "persistent_trending_pct": 20.0,
+      "chaotic_chop_pct": 80.0
+    }
+  },
+  "XAUUSD (Gold Spot)": {
+    "asset": "XAUUSD (Gold Spot)",
+    "total_bars": 105000,
+    "price_start": 4326.61,
+    "price_end": 4146.85918,
+    "mean_m1_bar_range": 2.14,
+    "median_m1_bar_range": 1.81,
+    "p95_m1_bar_range": 4.64,
+    "daily_volatility_pct": 1.46,
+    "overall_hurst_exponent": 0.857,
+    "kaufman_efficiency_ratio": 0.166,
+    "regime_distribution": {
+      "mean_reverting_pct": 46.0,
+      "persistent_trending_pct": 4.0,
+      "chaotic_chop_pct": 50.0
+    }
+  }
+}

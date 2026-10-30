@@ -91,6 +91,8 @@ if __name__ == "__main__":
     p.add_argument("--sl", type=float, default=4038.00)
     p.add_argument("--tp", type=float, default=4018.00)
     p.add_argument("--ticket", type=int, default=2001)
+    p.add_argument("--balance", type=float, default=10037.50)
+    p.add_argument("--risk", type=float, default=25.0)
     args = p.parse_args()
     
     open_virtual_trade(
@@ -100,5 +102,7 @@ if __name__ == "__main__":
         entry_price=args.entry,
         sl=args.sl,
         tp=args.tp,
-        ticket=args.ticket
+        ticket=args.ticket,
+        balance=args.balance,
+        risk_cash=args.risk
     )

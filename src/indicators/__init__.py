@@ -32,6 +32,17 @@ from .divergence_engine import (
     detect_macd_divergences,
     DivergenceSignal
 )
+from .regime_hurst import (
+    calculate_hurst_exponent,
+    calculate_kaufman_efficiency_ratio,
+    classify_market_regime,
+    MarketRegime
+)
+from .orderflow_delta import (
+    calculate_intrabar_delta,
+    detect_orderflow_anomalies,
+    OrderFlowSignal
+)
 from .quantum_confluence import (
     QuantumConfluenceEngine,
     QuantumSetup,
@@ -55,6 +66,13 @@ __all__ = [
     "detect_rsi_divergences",
     "detect_macd_divergences",
     "DivergenceSignal",
+    "calculate_hurst_exponent",
+    "calculate_kaufman_efficiency_ratio",
+    "classify_market_regime",
+    "MarketRegime",
+    "calculate_intrabar_delta",
+    "detect_orderflow_anomalies",
+    "OrderFlowSignal",
     "QuantumConfluenceEngine",
     "QuantumSetup",
     "evaluate_quantum_signal"

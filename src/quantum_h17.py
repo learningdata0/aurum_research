@@ -21,6 +21,8 @@ from src.indicators.quantum_confluence import QuantumConfluenceEngine, QuantumSe
 from src.indicators.volunacci import calculate_rvol
 from src.indicators.statistical_regression import calculate_linear_regression_channel
 from src.indicators.divergence_engine import detect_rsi_divergences, detect_macd_divergences
+from src.indicators.regime_hurst import classify_market_regime
+from src.indicators.orderflow_delta import calculate_intrabar_delta, detect_orderflow_anomalies
 
 
 def run_quantum_h17_comparison(
@@ -167,7 +169,7 @@ def run_quantum_h17_comparison(
                         reg_pass = False
 
                 # 3. Divergence
-                sub_slice = d_day.iloc[max(0, pos - 40):pos + 1].copy().reset_index(drop=True)
+                sub_slice = d_day.iloc[max(0, pos - 60):pos + 1].copy().reset_index(drop=True)
                 rsi_divs = detect_rsi_divergences(sub_slice, rsi_period=14, lookback_bars=30)
                 div_pass = True
                 # If opposing regular divergence exists, reject!
@@ -176,8 +178,16 @@ def run_quantum_h17_comparison(
                 if sig_dir == "BUY" and any(d.div_type == "REGULAR_BEARISH" for d in rsi_divs):
                     div_pass = False
 
+                # 4. Fractal Market Regime (Hurst & Efficiency)
+                regime = classify_market_regime(sub_slice, lookback=min(50, len(sub_slice)))
+                regime_pass = True
+                if sig_dir == "SELL" and regime.regime_type == "TRENDING_BULLISH":
+                    regime_pass = False
+                if sig_dir == "BUY" and regime.regime_type == "TRENDING_BEARISH":
+                    regime_pass = False
+
                 # Confluence filter
-                if vol_pass and reg_pass and div_pass:
+                if vol_pass and reg_pass and div_pass and regime_pass:
                     quantum_trades.append(t_record)
 
     # Compare Baseline vs Quantum

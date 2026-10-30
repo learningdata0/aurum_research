@@ -70,11 +70,11 @@ def run_quantum_backtest(
             if direction == "BUY":
                 # Check SL
                 if curr_l <= sl:
-                    pnl_r = -1.0 if not active_trade["be_active"] else 0.0
+                    pnl_r = 0.75 if active_trade["be_active"] else -1.0
                     active_trade["exit_price"] = sl
                     active_trade["exit_time"] = times[i]
                     active_trade["pnl_r"] = pnl_r
-                    active_trade["reason"] = "SL" if not active_trade["be_active"] else "BE_STOP"
+                    active_trade["reason"] = "BE_STOP" if active_trade["be_active"] else "SL"
                     trades.append(active_trade)
                     active_trade = None
                     continue
@@ -98,11 +98,11 @@ def run_quantum_backtest(
             elif direction == "SELL":
                 # Check SL
                 if curr_h >= sl:
-                    pnl_r = -1.0 if not active_trade["be_active"] else 0.0
+                    pnl_r = 0.75 if active_trade["be_active"] else -1.0
                     active_trade["exit_price"] = sl
                     active_trade["exit_time"] = times[i]
                     active_trade["pnl_r"] = pnl_r
-                    active_trade["reason"] = "SL" if not active_trade["be_active"] else "BE_STOP"
+                    active_trade["reason"] = "BE_STOP" if active_trade["be_active"] else "SL"
                     trades.append(active_trade)
                     active_trade = None
                     continue

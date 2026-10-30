@@ -40,6 +40,15 @@ from .divergence_engine import (
     detect_macd_divergences,
     DivergenceSignal
 )
+from .regime_hurst import (
+    classify_market_regime,
+    MarketRegime
+)
+from .orderflow_delta import (
+    calculate_intrabar_delta,
+    detect_orderflow_anomalies,
+    OrderFlowSignal
+)
 
 
 @dataclass
@@ -70,12 +79,16 @@ class QuantumConfluenceEngine:
         min_confluence_score: float = 75.0,
         rvol_threshold: float = 1.5,
         regression_lookback: int = 100,
-        rsi_period: int = 14
+        rsi_period: int = 14,
+        enable_regime_filter: bool = True,
+        enable_orderflow_delta: bool = True
     ):
         self.min_confluence_score = min_confluence_score
         self.rvol_threshold = rvol_threshold
         self.regression_lookback = regression_lookback
         self.rsi_period = rsi_period
+        self.enable_regime_filter = enable_regime_filter
+        self.enable_orderflow_delta = enable_orderflow_delta
 
     def analyze_market_slice(
         self,
@@ -85,7 +98,7 @@ class QuantumConfluenceEngine:
         htf_low: Optional[float] = None
     ) -> Optional[QuantumSetup]:
         """
-        Executes a 4-dimensional orthogonal scan on the trailing market data slice.
+        Executes a multi-dimensional orthogonal scan on the trailing market data slice.
         Returns a QuantumSetup if confluence score >= threshold and zero conflicts exist.
         """
         if len(df) < max(50, self.regression_lookback):
@@ -143,7 +156,22 @@ class QuantumConfluenceEngine:
             return None  # No structural hook found
 
         # ----------------------------------------------------
-        # Layer 2: Volume & Volunacci Footprint (Max 25 points)
+        # Innovation Filter: Fractal Market Regime (Hurst & KER)
+        # ----------------------------------------------------
+        regime_desc = "Neutral"
+        if self.enable_regime_filter:
+            regime = classify_market_regime(df, lookback=min(80, len(df)))
+            regime_desc = f"{regime.regime_type} (H={regime.hurst_exponent:.2f})"
+            # ZERO CONFLICT CHECK - Never counter-trend fade persistent trends!
+            if candidate_direction == "BUY" and regime.regime_type == "TRENDING_BEARISH":
+                return None  # VETO: Attempting to buy a heavy persistent downtrend
+            if candidate_direction == "SELL" and regime.regime_type == "TRENDING_BULLISH":
+                return None  # VETO: Attempting to sell a heavy persistent uptrend
+            if regime.regime_type == "MEAN_REVERTING":
+                layer_1_score += 10.0  # Favorable harmonic mean-reversion
+
+        # ----------------------------------------------------
+        # Layer 2: Volume & Order Flow Footprint (Max 25 points)
         # ----------------------------------------------------
         rvol_series = calculate_rvol(df, period=20)
         curr_rvol = float(rvol_series.iloc[-1])
@@ -158,6 +186,21 @@ class QuantumConfluenceEngine:
             layer_2_score += 10.0
         elif candidate_direction == "SELL" and curr_anomaly in ("ABSORPTION_SELL", "CHURN"):
             layer_2_score += 10.0
+
+        # Order Flow Intrabar Delta confirmation
+        of_desc = []
+        if self.enable_orderflow_delta and "volume" in df.columns:
+            df_delta = calculate_intrabar_delta(df.tail(40))
+            of_signals = detect_orderflow_anomalies(df_delta, lookback=15)
+            for s in of_signals:
+                if candidate_direction == "BUY" and s.signal_type in ("BULLISH_ABSORPTION", "DELTA_DIVERGENCE"):
+                    layer_2_score += 5.0
+                    of_desc.append(s.signal_type)
+                    break
+                elif candidate_direction == "SELL" and s.signal_type in ("BEARISH_ABSORPTION", "DELTA_DIVERGENCE"):
+                    layer_2_score += 5.0
+                    of_desc.append(s.signal_type)
+                    break
 
         # Volunacci Golden Pocket check
         vol_grid = calculate_volunacci_levels(curr_row, len(df) - 1, curr_anomaly, curr_rvol)
@@ -267,13 +310,16 @@ class QuantumConfluenceEngine:
             "Layer_2_Volume": layer_2_score,
             "Layer_3_Regression": layer_3_score,
             "Layer_4_Divergence": layer_4_score,
-            "Total_Score": total_score
+            "Total_Score": total_score,
+            "Regime": regime_desc
         }
 
         rationale = (
             f"Quantum Confluence ({total_score:.1f}/100) | Direction: {candidate_direction} | "
+            f"Regime: {regime_desc} | "
             f"SMC: Sweep of {target_h if candidate_direction=='SELL' else target_l:.2f} | "
             f"RVOL: {curr_rvol:.2f}x ({curr_anomaly}) | "
+            f"OrderFlow: {', '.join(of_desc) if of_desc else 'Standard'} | "
             f"Z-Score: {reg_channel.current_zscore if reg_channel else 0.0:+.2f} SD | "
             f"Divergence: {', '.join(div_desc) if div_desc else 'None'}"
         )

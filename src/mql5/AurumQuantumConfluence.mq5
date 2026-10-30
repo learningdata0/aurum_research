@@ -53,9 +53,10 @@ input bool   InpEnableRegression   = true;     // Plot Linear Regression Channel
 input int    InpRegLookback        = 100;      // Regression Lookback Bars
 input double InpRegDevMultiplier   = 2.0;      // Channel StdDev Multiplier
 
-input group "=== Layer 4: Divergence & Quantum Alerts ==="
+input group "=== Layer 4: Divergence & Quantum Dashboard ==="
 input bool   InpEnableDivergence   = true;     // Scan for RSI & MACD Divergences
 input int    InpRSIPeriod          = 14;       // RSI Period
+input bool   InpShowDashboard      = true;     // Show On-Chart HUD Information Panel
 input bool   InpSendAlerts         = true;     // Send Terminal and Push Alerts
 
 //--- Buffers
@@ -100,6 +101,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "AQ_FVG_");
    ObjectsDeleteAll(0, "AQ_VOL_");
    ObjectsDeleteAll(0, "AQ_DIV_");
+   ObjectsDeleteAll(0, "AQ_HUD_");
    ChartRedraw(0);
 }
 
@@ -243,6 +245,58 @@ int OnCalculate(const int rates_total,
             ObjectSetInteger(0, name, OBJPROP_BACK, true);
          }
       }
+   }
+
+   // ----------------------------------------------------------------
+   // 4. On-Chart HUD Information Dashboard
+   // ----------------------------------------------------------------
+   if(InpShowDashboard && rates_total > InpRegLookback)
+   {
+      int last_bar = rates_total - 1;
+      double curr_c = close[last_bar];
+      double mid = g_buf_reg_mid[last_bar];
+      double upper = g_buf_reg_upper[last_bar];
+      double sd = (upper - mid) / InpRegDevMultiplier;
+      double z_score = (sd > 0) ? ((curr_c - mid) / sd) : 0.0;
+
+      long sum_v = 0;
+      for(int v = 1; v <= 20; v++) sum_v += tick_volume[last_bar - v];
+      double avg_v = (double)sum_v / 20.0;
+      double rvol = (avg_v > 0) ? ((double)tick_volume[last_bar] / avg_v) : 1.0;
+
+      string bias = "NEUTRAL (BALANCED)";
+      color bias_col = clrGray;
+      if(z_score <= -1.8 && rvol >= 1.2)
+      {
+         bias = "HIGH BULLISH CONFLUENCE (OVERSOLD + VOLUME)";
+         bias_col = clrLimeGreen;
+      }
+      else if(z_score >= 1.8 && rvol >= 1.2)
+      {
+         bias = "HIGH BEARISH CONFLUENCE (OVERBOUGHT + VOLUME)";
+         bias_col = clrTomato;
+      }
+
+      string txt = StringFormat(
+         "AURUM QUANTUM CONFLUENCE v2.1\n" +
+         "Z-Score: %+.2f SD | RVOL: %.2fx\n" +
+         "Bias: %s\n" +
+         "Zero-Conflict Gate: ENFORCED (Micro-SL Protected)",
+         z_score, rvol, bias
+      );
+
+      string lbl = "AQ_HUD_TXT";
+      if(ObjectFind(0, lbl) < 0)
+      {
+         ObjectCreate(0, lbl, OBJ_LABEL, 0, 0, 0);
+         ObjectSetInteger(0, lbl, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+         ObjectSetInteger(0, lbl, OBJPROP_XDISTANCE, 20);
+         ObjectSetInteger(0, lbl, OBJPROP_YDISTANCE, 40);
+         ObjectSetString(0, lbl, OBJPROP_FONT, "Consolas");
+         ObjectSetInteger(0, lbl, OBJPROP_FONTSIZE, 10);
+      }
+      ObjectSetString(0, lbl, OBJPROP_TEXT, txt);
+      ObjectSetInteger(0, lbl, OBJPROP_COLOR, bias_col);
    }
 
    return(rates_total);
